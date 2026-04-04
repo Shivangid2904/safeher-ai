@@ -3,8 +3,10 @@ import numpy as np
 import joblib
 import tensorflow as tf
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)  # IMPORTANT for frontend connection
 
 # -----------------------------
 # LOAD MODEL + ENCODER
@@ -38,17 +40,22 @@ def home():
 def predict_risk():
     try:
         data = request.json
+
+        # Debug
+        print("📡 API CALLED:", data)
+
         lat = data['lat']
         long = data['long']
         hour = data['hour']
         crime_score = data['crime_score']
         crowd_density = data['crowd_density']
+
         input_data = np.array([[lat, long, hour, crime_score, crowd_density]])
+
         prediction = model.predict(input_data)
         class_index = np.argmax(prediction)
-        risk_level = label_encoder.inverse_transform([class_index])[0]
 
-        # Risk score (convert probability to %)
+        risk_level = label_encoder.inverse_transform([class_index])[0]
         risk_score = int(np.max(prediction) * 100)
 
         return jsonify({
@@ -57,6 +64,7 @@ def predict_risk():
         })
 
     except Exception as e:
+        print("❌ ERROR:", str(e))
         return jsonify({"error": str(e)})
 
 # -----------------------------
