@@ -1,0 +1,10 @@
+POST http://127.0.0.1:5000/predict_risk
+Content-Type: application/json
+
+{
+  "lat": 16.50,
+  "long": 80.65,
+  "hour": 23,
+  "crime_score": 0.8,
+  "crowd_density": 0.2
+}
