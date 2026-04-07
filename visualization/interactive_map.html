@@ -1,78 +1,799 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>SafeHer AI Interactive Map</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>SafeHer AI – Live Risk Map</title>
+  <meta name="description" content="SafeHer AI interactive safety map with real-time risk zones, AI prediction and safe road routing for Vijayawada."/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --pink:#e91e8c;--purple:#8b5cf6;--blue:#3b82f6;
+      --red:#ef4444;--orange:#f97316;--green:#22c55e;
+      --bg:#0a0a14;--panel:rgba(13,13,28,0.93);--border:rgba(255,255,255,0.07);
+      --t1:#f0f0ff;--t2:rgba(200,200,230,0.55);
+    }
+    html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:var(--t1);overflow:hidden}
+    #app{display:flex;height:100vh}
+    #map{flex:1;height:100%;z-index:1}
 
-    <!-- Leaflet -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+    /* Sidebar */
+    #sidebar{width:330px;height:100%;background:var(--panel);backdrop-filter:blur(24px);
+      border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:10;
+      overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+    #sidebar::-webkit-scrollbar{width:3px}
+    #sidebar::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 
-    <style>
-        #map {
-            height: 100vh;
-        }
-    </style>
+    .hd{padding:16px 16px 12px;border-bottom:1px solid var(--border);
+      background:linear-gradient(135deg,rgba(233,30,140,.1),rgba(139,92,246,.1));flex-shrink:0}
+    .hd-row{display:flex;align-items:center;gap:10px}
+    .hd-icon{width:36px;height:36px;border-radius:9px;flex-shrink:0;
+      background:linear-gradient(135deg,var(--pink),var(--purple));
+      display:flex;align-items:center;justify-content:center;font-size:17px;
+      box-shadow:0 4px 14px rgba(233,30,140,.4)}
+    .hd-name{font-family:'Outfit',sans-serif;font-size:17px;font-weight:700;
+      background:linear-gradient(90deg,#e91e8c,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .hd-sub{font-size:10px;color:var(--t2);letter-spacing:.05em;margin-top:1px}
+
+    .sec{padding:12px 15px;border-bottom:1px solid var(--border);flex-shrink:0}
+    .sec-t{font-size:9px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--t2);margin-bottom:9px}
+
+    /* API Status */
+    #api-bar{display:flex;align-items:center;justify-content:space-between;
+      background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:8px;
+      padding:8px 11px;margin-bottom:8px;font-size:11px}
+    #api-dot{width:8px;height:8px;border-radius:50%;background:#666;flex-shrink:0;margin-right:7px;animation:pd 2s infinite}
+    #api-dot.online{background:var(--green)} #api-dot.offline{background:var(--orange);animation:none}
+    #api-label{flex:1;font-weight:500} #api-label small{display:block;font-size:9px;color:var(--t2);margin-top:1px}
+    .api-retry{font-size:10px;color:var(--blue);cursor:pointer;text-decoration:underline}
+
+    @keyframes pd{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
+
+    /* Clock */
+    #clk{font-family:'Outfit',sans-serif;font-size:26px;font-weight:700}
+    #dt{font-size:10px;color:var(--t2);margin-top:2px}
+    .dot{display:inline-block;width:6px;height:6px;background:var(--green);border-radius:50%;
+      animation:pd 1.6s infinite;margin-right:5px;vertical-align:middle}
+
+    /* Stats */
+    .sg{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+    .sc{background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:9px;padding:9px 11px}
+    .sl{font-size:9px;color:var(--t2);letter-spacing:.05em;margin-bottom:3px}
+    .sv{font-family:'Outfit',sans-serif;font-size:21px;font-weight:700}
+    .r{color:var(--red)}.o{color:var(--orange)}.g{color:var(--green)}.b{color:var(--blue)}
+
+    /* Sliders */
+    .cr{margin-bottom:11px}.cr:last-child{margin-bottom:0}
+    .cl{display:flex;justify-content:space-between;font-size:11px;color:var(--t2);margin-bottom:5px}
+    .cv{font-weight:600;color:var(--t1);font-size:11px}
+    input[type=range]{-webkit-appearance:none;width:100%;height:3px;background:rgba(255,255,255,.1);border-radius:3px;outline:none;cursor:pointer}
+    input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+      background:linear-gradient(135deg,var(--pink),var(--purple));cursor:pointer;
+      box-shadow:0 0 7px rgba(139,92,246,.5);transition:transform .15s}
+    input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2)}
+
+    /* Buttons */
+    .tr{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px}
+    .tb{flex:1;min-width:60px;padding:6px 8px;font-size:10px;font-weight:600;
+      border-radius:7px;border:1px solid var(--border);background:rgba(255,255,255,.04);
+      color:var(--t2);cursor:pointer;transition:all .2s;text-align:center}
+    .tb:hover{transform:translateY(-1px)}
+    .ar{background:rgba(239,68,68,.18);border-color:var(--red);color:var(--red)}
+    .ao{background:rgba(249,115,22,.18);border-color:var(--orange);color:var(--orange)}
+    .ag{background:rgba(34,197,94,.18);border-color:var(--green);color:var(--green)}
+    .ap{background:rgba(139,92,246,.18);border-color:var(--purple);color:var(--purple)}
+    .at{background:rgba(59,130,246,.18);border-color:var(--blue);color:var(--blue)}
+
+    /* Legend */
+    .li{display:flex;align-items:center;gap:7px;margin-bottom:6px;font-size:11px}
+    .ld{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+
+    /* Route Planner */
+    .route-box{background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:9px;padding:10px 12px;margin-top:8px}
+    .rs-step{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:11px}
+    .rs-step:last-child{margin-bottom:0}
+    .rs-num{width:20px;height:20px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
+    .rs-num.done{background:var(--green);color:#000}
+    .rs-num.active{background:var(--orange);color:#000;animation:pd 1s infinite}
+    .rs-num.wait{background:rgba(255,255,255,.1);color:var(--t2)}
+
+    .route-loading{display:none;text-align:center;padding:10px;font-size:11px;color:var(--purple)}
+    .route-loading span{animation:dots 1.4s infinite}
+    @keyframes dots{0%,100%{opacity:1}50%{opacity:.2}}
+
+    #route-stats{background:rgba(255,255,255,.04);border:1px solid var(--green);border-radius:9px;
+      padding:10px 12px;margin-top:8px;display:none;animation:fu .3s ease}
+    @keyframes fu{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+    .rsg{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-top:7px}
+    .rsc{background:rgba(255,255,255,.05);border-radius:7px;padding:6px;text-align:center}
+    .rsc-l{font-size:8.5px;color:var(--t2);letter-spacing:.05em}
+    .rsc-v{font-size:13px;font-weight:600;margin-top:2px}
+
+    /* Risk bar */
+    .risk-bar{height:6px;border-radius:3px;margin:7px 0;overflow:hidden;display:flex}
+    .risk-seg{height:100%;transition:width .5s}
+
+    /* Predict */
+    #pred-wrap{padding:12px 15px;background:linear-gradient(135deg,rgba(139,92,246,.07),rgba(233,30,140,.07));
+      border-top:1px solid var(--border);margin-top:auto;flex-shrink:0}
+    #pred-res{padding:11px;border-radius:11px;background:rgba(255,255,255,.04);border:1px solid var(--border);display:none;animation:fu .3s ease}
+    .pl{font-family:'Outfit',sans-serif;font-size:22px;font-weight:700}
+    .ps{font-size:11px;color:var(--t2);margin-top:2px}
+    .pd-g{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-top:8px}
+    .pd-c{background:rgba(255,255,255,.05);border-radius:7px;padding:5px;text-align:center}
+    .pd-l{font-size:8.5px;color:var(--t2);letter-spacing:.05em}
+    .pd-v{font-size:13px;font-weight:600;margin-top:2px}
+    #pred-api{font-size:9.5px;color:var(--t2);margin-top:7px;text-align:center}
+
+    /* Loading */
+    #loading{position:absolute;inset:0;background:rgba(10,10,20,.88);
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      z-index:999;backdrop-filter:blur(5px)}
+    .sp{width:46px;height:46px;border:3px solid var(--border);border-top-color:var(--pink);
+      border-radius:50%;animation:spin .8s linear infinite;margin-bottom:14px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* Badge */
+    #badge{position:absolute;top:12px;left:50%;transform:translateX(-50%);
+      background:var(--panel);backdrop-filter:blur(16px);border:1px solid var(--border);
+      border-radius:30px;padding:7px 18px;font-size:11px;font-weight:600;
+      color:var(--t2);z-index:5;pointer-events:none;white-space:nowrap}
+    #badge span{color:var(--t1)}
+
+    /* Route cursor */
+    .route-cursor #map{cursor:crosshair!important}
+
+    /* Toast */
+    #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);
+      background:#1a1a2e;border:1px solid var(--border);border-radius:20px;
+      padding:10px 20px;font-size:12px;color:var(--t1);z-index:9999;
+      transition:transform .3s;pointer-events:none;white-space:nowrap}
+    #toast.show{transform:translateX(-50%) translateY(0)}
+  </style>
 </head>
 <body>
+<div id="loading"><div class="sp"></div><p style="color:var(--t2);font-size:12px">Loading SafeHer AI…</p></div>
+<div id="toast"></div>
 
-<div id="map"></div>
+<div id="app">
+<!-- ══════════════ SIDEBAR ══════════════ -->
+<nav id="sidebar">
 
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <div class="hd">
+    <div class="hd-row">
+      <div class="hd-icon">🛡️</div>
+      <div><div class="hd-name">SafeHer AI</div><div class="hd-sub">Vijayawada Safety Intelligence</div></div>
+    </div>
+  </div>
+
+  <!-- API Status -->
+  <div class="sec">
+    <div class="sec-t">🔌 Flask API Status</div>
+    <div id="api-bar">
+      <div id="api-dot"></div>
+      <div id="api-label">Checking…<small id="api-hint"></small></div>
+      <span class="api-retry" onclick="checkApi()">Retry</span>
+    </div>
+    <div style="font-size:9.5px;color:var(--t2);line-height:1.5">
+      To start API: <code style="color:var(--purple);font-size:9px">cd backend/flask_api && python app.py</code>
+    </div>
+  </div>
+
+  <!-- Clock -->
+  <div class="sec">
+    <div class="sec-t">📡 Live Status</div>
+    <div id="clk">00:00:00</div>
+    <div id="dt"></div>
+    <div style="margin-top:6px;font-size:10px"><span class="dot"></span><span style="color:var(--t2)">Live · Vijayawada, AP</span></div>
+  </div>
+
+  <!-- Stats -->
+  <div class="sec">
+    <div class="sec-t">📊 Dataset Overview</div>
+    <div class="sg">
+      <div class="sc"><div class="sl">HIGH RISK</div><div class="sv r" id="c-hi">—</div></div>
+      <div class="sc"><div class="sl">MODERATE</div><div class="sv o" id="c-mo">—</div></div>
+      <div class="sc"><div class="sl">SAFE</div><div class="sv g" id="c-sf">—</div></div>
+      <div class="sc"><div class="sl">VISIBLE</div><div class="sv b" id="c-vi">—</div></div>
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <div class="sec">
+    <div class="sec-t">⚙️ Filters</div>
+    <div class="cr">
+      <div class="cl"><span>🕐 Hour</span><span class="cv" id="lh">All</span></div>
+      <input type="range" id="fh" min="-1" max="23" value="-1" step="1"/>
+    </div>
+    <div class="cr">
+      <div class="cl"><span>🔴 Min Crime Score</span><span class="cv" id="lc">0.0</span></div>
+      <input type="range" id="fc" min="0" max="1" value="0" step="0.05"/>
+    </div>
+    <div class="cr">
+      <div class="cl"><span>👥 Min Crowd</span><span class="cv" id="lk">0.0</span></div>
+      <input type="range" id="fk" min="0" max="1" value="0" step="0.05"/>
+    </div>
+  </div>
+
+  <!-- Layers -->
+  <div class="sec">
+    <div class="sec-t">🗂️ Layers</div>
+    <div class="tr">
+      <button class="tb ar" id="b-hi" onclick="toggleLayer('High')">🔴 High</button>
+      <button class="tb ao" id="b-mo" onclick="toggleLayer('Moderate')">🟠 Moderate</button>
+      <button class="tb ag" id="b-sf" onclick="toggleLayer('Safe')">🟢 Safe</button>
+    </div>
+    <div class="tr">
+      <button class="tb" id="b-ht" onclick="toggleHeat()">🔥 Dataset Heat</button>
+      <button class="tb" id="b-ph" onclick="togglePredHeat()">🎯 Pred. Heat</button>
+      <button class="tb" onclick="resetAll()" style="color:var(--blue);border-color:var(--blue)">↺ Reset</button>
+    </div>
+  </div>
+
+  <!-- Legend -->
+  <div class="sec">
+    <div class="sec-t">🗺️ Legend</div>
+    <div class="li"><div class="ld" style="background:var(--red)"></div>High Risk</div>
+    <div class="li"><div class="ld" style="background:var(--orange)"></div>Moderate Risk</div>
+    <div class="li"><div class="ld" style="background:var(--green)"></div>Safe Zone</div>
+    <div class="li"><div class="ld" style="background:var(--purple)"></div>Live Prediction</div>
+  </div>
+
+  <!-- Route Planner -->
+  <div class="sec">
+    <div class="sec-t">🛣️ Safe Route Planner</div>
+    <div class="tr">
+      <button class="tb" id="b-route" onclick="toggleRouteMode()">▶ Plan Safe Route</button>
+      <button class="tb" id="b-clr" onclick="clearRoute()" style="display:none;color:var(--red);border-color:var(--red)">✕ Clear</button>
+    </div>
+    <div class="route-box" id="route-steps" style="display:none">
+      <div class="rs-step"><div class="rs-num wait" id="rn1">A</div><span id="rt1" style="color:var(--t2)">Click map to set start</span></div>
+      <div class="rs-step"><div class="rs-num wait" id="rn2">B</div><span id="rt2" style="color:var(--t2)">Click again to set destination</span></div>
+    </div>
+    <div class="route-loading" id="route-loading">
+      <div style="font-size:18px;margin-bottom:5px">🛣️</div>
+      Finding safest road route<span>…</span>
+    </div>
+    <div id="route-stats">
+      <div style="font-size:12px;font-weight:600;margin-bottom:5px">✅ Route Found · Risk-Colored</div>
+      <div class="risk-bar">
+        <div class="risk-seg" id="rb-g" style="background:var(--green)"></div>
+        <div class="risk-seg" id="rb-o" style="background:var(--orange)"></div>
+        <div class="risk-seg" id="rb-r" style="background:var(--red)"></div>
+      </div>
+      <div class="rsg">
+        <div class="rsc"><div class="rsc-l">DISTANCE</div><div class="rsc-v b" id="r-dist">—</div></div>
+        <div class="rsc"><div class="rsc-l">DURATION</div><div class="rsc-v" id="r-dur">—</div></div>
+        <div class="rsc"><div class="rsc-l">SAFE %</div><div class="rsc-v g" id="r-safe">—</div></div>
+      </div>
+      <div style="font-size:9px;color:var(--t2);margin-top:6px;text-align:center">
+        🟢 safe road · 🟠 moderate · 🔴 avoid this stretch
+      </div>
+    </div>
+  </div>
+
+  <!-- Predict -->
+  <div id="pred-wrap">
+    <div class="sec-t" style="margin-bottom:6px">🎯 Click-to-Predict</div>
+    <div style="font-size:10px;color:var(--t2);margin-bottom:8px">
+      👆 Tap anywhere on map. Crime &amp; crowd auto-estimated from nearby data points (IDW).
+    </div>
+    <div id="pred-res">
+      <div id="p-lvl" class="pl">—</div>
+      <div id="p-scr" class="ps">—</div>
+      <div class="pd-g">
+        <div class="pd-c"><div class="pd-l">HOUR</div><div class="pd-v" id="p-hr">—</div></div>
+        <div class="pd-c"><div class="pd-l">CRIME</div><div class="pd-v" id="p-cr">—</div></div>
+        <div class="pd-c"><div class="pd-l">CROWD</div><div class="pd-v" id="p-ck">—</div></div>
+      </div>
+      <div id="pred-api"></div>
+    </div>
+  </div>
+
+</nav>
+
+<!-- ══════════════ MAP ══════════════ -->
+<div style="position:relative;flex:1">
+  <div id="badge">Risk Intelligence · <span id="badge-n">—</span> points · Vijayawada</div>
+  <div id="map"></div>
+</div>
+</div>
 
 <script>
-    // Create map
-    var map = L.map('map').setView([16.5062, 80.6480], 13);
+// ═══════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════
+let ALL_DATA=[], riskGrid=null;
+let layerVis={High:true,Moderate:true,Safe:true};
+let heatOn=false,predHeatOn=false;
+let circleGroups={High:[],Moderate:[],Safe:[]};
+let heatLayer=null,predHeatLayer=null,clickMarker=null;
+let predPoints=[];
 
-    // Add map tiles
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap'
-    }).addTo(map);
+// Route
+let routeMode=false,routeStep=0,routeStartLL=null;
+let routeMarkers=[],routeLayers=[];
 
-    // Click event
-    map.on('click', function(e) {
+const GROW=70,GCOL=80;
+const LATMIN=16.490,LATMAX=16.560,LNGMIN=16.630,LNGMAX=80.710;
+// Correct LNG bounds:
+const LNGMIN_=80.630,LNGMAX_=80.710;
 
-    var lat = e.latlng.lat;
-    var lng = e.latlng.lng;
+// Risk grid bounds (corrected)
+const GR={LATMIN:16.490,LATMAX:16.560,LNGMIN:80.630,LNGMAX:80.710,ROWS:70,COLS:80};
 
-    // RANDOM realistic inputs
-    var hour = Math.floor(Math.random() * 24);
-    var crime_score = Math.random().toFixed(2);
-    var crowd_density = Math.random().toFixed(2);
+const RC={High:'#ef4444',Moderate:'#f97316',Safe:'#22c55e'};
+const OSRM='https://router.project-osrm.org/route/v1/driving';
 
-    console.log("Inputs:", lat, lng, hour, crime_score, crowd_density);
+let apiOnline=false;
 
-    var data = {
-        lat: lat,
-        long: lng,
-        hour: hour,
-        crime_score: parseFloat(crime_score),
-        crowd_density: parseFloat(crowd_density)
-    };
+// ═══════════════════════════════════════════
+// MAP
+// ═══════════════════════════════════════════
+const map=L.map('map',{zoomControl:false}).setView([16.5062,80.6480],13);
+L.control.zoom({position:'topright'}).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+  attribution:'© OpenStreetMap © CARTO',subdomains:'abcd',maxZoom:19
+}).addTo(map);
 
-    fetch('http://127.0.0.1:5000/predict_risk', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(data)
-    })
-    .then(response => response.json())
-    .then(result => {
+// ═══════════════════════════════════════════
+// API STATUS CHECK
+// ═══════════════════════════════════════════
+async function checkApi(){
+  const dot=document.getElementById('api-dot');
+  const lbl=document.getElementById('api-label');
+  const hint=document.getElementById('api-hint');
+  dot.className='';
+  lbl.childNodes[0].textContent='Checking…';
+  hint.textContent='';
+  try{
+    const ctrl=new AbortController();
+    const id=setTimeout(()=>ctrl.abort(),3000);
+    const r=await fetch('http://127.0.0.1:5000/',{signal:ctrl.signal});
+    clearTimeout(id);
+    if(r.ok){
+      dot.className='online'; apiOnline=true;
+      lbl.childNodes[0].textContent='Flask API Online';
+      hint.textContent='AI predictions active ✅';
+      return;
+    }
+  } catch{}
+  dot.className='offline'; apiOnline=false;
+  lbl.childNodes[0].textContent='Flask API Offline';
+  hint.textContent='Using local fallback model';
+}
 
-        L.popup()
-            .setLatLng([lat, lng])
-            .setContent(
-                `<b>Risk Level:</b> ${result.level}<br>
-                 <b>Risk Score:</b> ${result.risk_score}<br><br>
-                 <b>Hour:</b> ${hour}<br>
-                 <b>Crime:</b> ${crime_score}<br>
-                 <b>Crowd:</b> ${crowd_density}`
-            )
-            .openOn(map);
+// ═══════════════════════════════════════════
+// IDW — inverse distance weighting from dataset
+// ═══════════════════════════════════════════
+function getNearbyMetrics(lat,lng){
+  const K=10;
+  const pts=ALL_DATA.map(d=>{
+    const dl=d.lat-lat,dg=d.lng-lng;
+    return{d2:dl*dl+dg*dg,crime:d.crime_score,crowd:d.crowd_density};
+  }).sort((a,b)=>a.d2-b.d2).slice(0,K);
+  let ws=0,wc=0,wk=0;
+  pts.forEach(p=>{const w=1/(p.d2+1e-10);ws+=w;wc+=w*p.crime;wk+=w*p.crowd});
+  return{
+    crime_score: +Math.min(1,Math.max(0,wc/ws)).toFixed(2),
+    crowd_density: +Math.min(1,Math.max(0,wk/ws)).toFixed(2)
+  };
+}
+
+// ═══════════════════════════════════════════
+// RISK GRID  (for coloring road route)
+// ═══════════════════════════════════════════
+function buildRiskGrid(){
+  riskGrid=Array.from({length:GR.ROWS},()=>new Float32Array(GR.COLS).fill(0.35));
+  const cnt=Array.from({length:GR.ROWS},()=>new Uint16Array(GR.COLS));
+  ALL_DATA.forEach(d=>{
+    const r=Math.floor((d.lat-GR.LATMIN)/(GR.LATMAX-GR.LATMIN)*(GR.ROWS-1));
+    const c=Math.floor((d.lng-GR.LNGMIN)/(GR.LNGMAX-GR.LNGMIN)*(GR.COLS-1));
+    if(r<0||r>=GR.ROWS||c<0||c>=GR.COLS)return;
+    const rv=d.risk==='High'?1.0:d.risk==='Moderate'?0.5:0.08;
+    riskGrid[r][c]=(riskGrid[r][c]*cnt[r][c]+rv)/(cnt[r][c]+1);
+    cnt[r][c]++;
+  });
+}
+
+function getGridRisk(lat,lng){
+  if(!riskGrid)return 0.35;
+  const r=Math.max(0,Math.min(GR.ROWS-1,Math.round((lat-GR.LATMIN)/(GR.LATMAX-GR.LATMIN)*(GR.ROWS-1))));
+  const c=Math.max(0,Math.min(GR.COLS-1,Math.round((lng-GR.LNGMIN)/(GR.LNGMAX-GR.LNGMIN)*(GR.COLS-1))));
+  return riskGrid[r][c];
+}
+
+// ═══════════════════════════════════════════
+// ROUTING — OSRM (real roads) + risk coloring
+// ═══════════════════════════════════════════
+async function planRoute(startLL,endLL){
+  showRouteLoading(true);
+  try{
+    const url=`${OSRM}/${startLL.lng},${startLL.lat};${endLL.lng},${endLL.lat}?overview=full&geometries=geojson`;
+    const res=await fetch(url);
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const data=await res.json();
+    if(data.code!=='Ok')throw new Error(data.message||'No route');
+
+    const route=data.routes[0];
+    const coords=route.geometry.coordinates; // [lng,lat] pairs
+    const distM=route.distance;
+    const durS=route.duration;
+
+    drawColoredRoute(coords,distM,durS);
+    toast('✅ Safe route found · '+fmtDist(distM));
+  }catch(e){
+    console.error('OSRM error',e);
+    toast('⚠️ Routing failed: '+e.message,true);
+    document.getElementById('route-stats').style.display='none';
+  }
+  showRouteLoading(false);
+}
+
+function drawColoredRoute(coords,distM,durS){
+  routeLayers.forEach(l=>map.removeLayer(l));
+  routeLayers=[];
+
+  const lls=coords.map(([lng,lat])=>[lat,lng]);
+
+  // Shadow
+  const sh=L.polyline(lls,{color:'#000',weight:11,opacity:.35}).addTo(map);
+  routeLayers.push(sh);
+
+  // Count risk per segment
+  let gCnt=0,oCnt=0,rCnt=0;
+  let cur=null,curPts=[];
+
+  const flush=()=>{
+    if(curPts.length>1){
+      const col=cur==='r'?'#ef4444':cur==='o'?'#f97316':'#22c55e';
+      routeLayers.push(L.polyline(curPts,{color:col,weight:7,opacity:.92,lineCap:'round',lineJoin:'round'}).addTo(map));
+    }
+  };
+
+  lls.forEach(([lat,lng])=>{
+    const rv=getGridRisk(lat,lng);
+    const seg=rv>0.62?'r':rv>0.30?'o':'g';
+    if(seg==='r')rCnt++;else if(seg==='o')oCnt++;else gCnt++;
+    if(seg!==cur){flush();cur=seg;curPts=[[lat,lng]];}
+    else curPts.push([lat,lng]);
+  });
+  flush();
+
+  // Risk bar
+  const tot=gCnt+oCnt+rCnt||1;
+  document.getElementById('rb-g').style.width=(gCnt/tot*100)+'%';
+  document.getElementById('rb-o').style.width=(oCnt/tot*100)+'%';
+  document.getElementById('rb-r').style.width=(rCnt/tot*100)+'%';
+
+  // Stats
+  document.getElementById('r-dist').textContent=fmtDist(distM);
+  document.getElementById('r-dur').textContent=fmtDur(durS);
+  document.getElementById('r-safe').textContent=Math.round(gCnt/tot*100)+'%';
+  document.getElementById('route-stats').style.display='block';
+  document.getElementById('b-clr').style.display='';
+
+  // Fit bounds
+  map.fitBounds(L.polyline(lls).getBounds(),{padding:[40,40]});
+}
+
+function fmtDist(m){return m>=1000?(m/1000).toFixed(1)+' km':Math.round(m)+' m'}
+function fmtDur(s){const m=Math.round(s/60);return m<60?m+' min':Math.floor(m/60)+'h '+(m%60)+'m'}
+
+// ═══════════════════════════════════════════
+// ROUTE MODE UI
+// ═══════════════════════════════════════════
+function toggleRouteMode(){
+  routeMode=!routeMode;
+  const btn=document.getElementById('b-route');
+  const steps=document.getElementById('route-steps');
+  if(routeMode){
+    btn.classList.add('ap'); btn.textContent='⏹ Cancel';
+    steps.style.display='block';
+    document.getElementById('app').classList.add('route-cursor');
+    routeStep=0; routeStartLL=null;
+    setStep(0);
+    toast('📍 Click on the map to set START point');
+  }else{
+    btn.classList.remove('ap'); btn.textContent='▶ Plan Safe Route';
+    steps.style.display='none';
+    document.getElementById('app').classList.remove('route-cursor');
+  }
+}
+
+function setStep(s){
+  const n1=document.getElementById('rn1'),n2=document.getElementById('rn2');
+  const t1=document.getElementById('rt1'),t2=document.getElementById('rt2');
+  n1.className='rs-num '+(s===0?'active':s>0?'done':'wait');
+  n2.className='rs-num '+(s===1?'active':'wait');
+  t1.style.color=s>0?'var(--green)':'';
+  t1.textContent=s>0?'✅ Start set':'Click map to set start (A)';
+  t2.style.color=s===1?'':'var(--t2)';
+  t2.textContent=s===1?'Now click to set destination (B)':'Click again to set destination';
+}
+
+function clearRoute(){
+  routeLayers.forEach(l=>map.removeLayer(l)); routeLayers=[];
+  routeMarkers.forEach(m=>map.removeLayer(m)); routeMarkers=[];
+  routeStartLL=null; routeStep=0;
+  document.getElementById('route-stats').style.display='none';
+  document.getElementById('b-clr').style.display='none';
+  if(routeMode){setStep(0);toast('📍 Click to set new start point');}
+}
+
+function showRouteLoading(v){
+  document.getElementById('route-loading').style.display=v?'block':'none';
+}
+
+// ═══════════════════════════════════════════
+// MARKERS
+// ═══════════════════════════════════════════
+function renderMarkers(){
+  Object.keys(circleGroups).forEach(k=>{circleGroups[k].forEach(c=>map.removeLayer(c));circleGroups[k]=[]});
+  if(heatLayer){map.removeLayer(heatLayer);heatLayer=null}
+
+  const fh=parseInt(document.getElementById('fh').value);
+  const fc=parseFloat(document.getElementById('fc').value);
+  const fk=parseFloat(document.getElementById('fk').value);
+  let cn={High:0,Moderate:0,Safe:0,vis:0};
+  const hpts=[];
+
+  ALL_DATA.forEach(d=>{
+    if(fh!==-1&&d.hour!==fh)return;
+    if(d.crime_score<fc)return;
+    if(d.crowd_density<fk)return;
+    cn[d.risk]++;cn.vis++;
+    if(heatOn)hpts.push([d.lat,d.lng,d.crime_score]);
+    if(!layerVis[d.risk])return;
+    const col=RC[d.risk];
+    const h12=d.hour%12||12,ap=d.hour<12?'AM':'PM';
+    const em=d.risk==='High'?'🔴':d.risk==='Moderate'?'🟠':'🟢';
+    const c=L.circleMarker([d.lat,d.lng],{
+      radius:d.risk==='High'?8:d.risk==='Moderate'?6:5,
+      color:col,weight:1.5,fill:true,fillColor:col,fillOpacity:.75
     });
-});
-</script>
+    c.bindPopup(`<div style="font-family:'Inter',sans-serif;min-width:175px">
+      <b style="color:${col};font-size:13px">${em} ${d.risk} Risk</b>
+      <table style="width:100%;font-size:11px;border-collapse:collapse;margin-top:6px">
+        <tr><td style="color:#999;padding:2px 0">🕐 Hour</td><td style="text-align:right;font-weight:600">${h12}:00 ${ap}</td></tr>
+        <tr><td style="color:#999;padding:2px 0">🔴 Crime</td><td style="text-align:right;font-weight:600;color:${d.crime_score>.7?'#ef4444':d.crime_score>.4?'#f97316':'#22c55e'}">${d.crime_score.toFixed(2)}</td></tr>
+        <tr><td style="color:#999;padding:2px 0">👥 Crowd</td><td style="text-align:right;font-weight:600">${d.crowd_density.toFixed(2)}</td></tr>
+        <tr><td style="color:#999;padding:2px 0">📍</td><td style="text-align:right;font-size:9px;color:#aaa">${d.lat.toFixed(4)}, ${d.lng.toFixed(4)}</td></tr>
+      </table></div>`,{maxWidth:210});
+    c.addTo(map);
+    circleGroups[d.risk].push(c);
+  });
 
+  if(heatOn&&hpts.length)
+    heatLayer=L.heatLayer(hpts,{radius:22,blur:18,maxZoom:17,gradient:{0:'#22c55e',.45:'#f97316',1:'#ef4444'}}).addTo(map);
+
+  document.getElementById('c-hi').textContent=cn.High;
+  document.getElementById('c-mo').textContent=cn.Moderate;
+  document.getElementById('c-sf').textContent=cn.Safe;
+  document.getElementById('c-vi').textContent=cn.vis;
+  document.getElementById('badge-n').textContent=cn.vis.toLocaleString();
+  refreshPredHeat();
+}
+
+function refreshPredHeat(){
+  if(predHeatLayer){map.removeLayer(predHeatLayer);predHeatLayer=null}
+  if(predHeatOn&&predPoints.length)
+    predHeatLayer=L.heatLayer(predPoints,{radius:30,blur:22,maxZoom:17,
+      gradient:{0:'#3b82f6',.5:'#8b5cf6',1:'#ef4444'}}).addTo(map);
+}
+
+// ═══════════════════════════════════════════
+// TOGGLES
+// ═══════════════════════════════════════════
+function toggleLayer(k){
+  layerVis[k]=!layerVis[k];
+  const bm={High:'b-hi',Moderate:'b-mo',Safe:'b-sf'};
+  const cm={High:'ar',Moderate:'ao',Safe:'ag'};
+  const b=document.getElementById(bm[k]);
+  layerVis[k]?b.classList.add(cm[k]):b.classList.remove(cm[k]);
+  renderMarkers();
+}
+function toggleHeat(){
+  heatOn=!heatOn;
+  const b=document.getElementById('b-ht');
+  heatOn?b.classList.add('ap'):b.classList.remove('ap');
+  renderMarkers();
+}
+function togglePredHeat(){
+  predHeatOn=!predHeatOn;
+  const b=document.getElementById('b-ph');
+  predHeatOn?b.classList.add('at'):b.classList.remove('at');
+  refreshPredHeat();
+}
+function resetAll(){
+  ['fh','fc','fk'].forEach(id=>{document.getElementById(id).value=id==='fh'?'-1':'0'});
+  document.getElementById('lh').textContent='All';
+  document.getElementById('lc').textContent='0.0';
+  document.getElementById('lk').textContent='0.0';
+  renderMarkers();
+}
+
+// ═══════════════════════════════════════════
+// SLIDERS
+// ═══════════════════════════════════════════
+document.getElementById('fh').addEventListener('input',function(){
+  const v=parseInt(this.value);
+  document.getElementById('lh').textContent=v===-1?'All':`${v%12||12}:00 ${v<12?'AM':'PM'}`;
+  renderMarkers();
+});
+document.getElementById('fc').addEventListener('input',function(){
+  document.getElementById('lc').textContent=parseFloat(this.value).toFixed(2);renderMarkers();
+});
+document.getElementById('fk').addEventListener('input',function(){
+  document.getElementById('lk').textContent=parseFloat(this.value).toFixed(2);renderMarkers();
+});
+
+// ═══════════════════════════════════════════
+// MAP CLICK
+// ═══════════════════════════════════════════
+map.on('click',async function(e){
+  const lat=e.latlng.lat, lng=e.latlng.lng;
+
+  // ── ROUTE MODE ──
+  if(routeMode){
+    if(routeStep===0){
+      routeMarkers.forEach(m=>map.removeLayer(m));routeMarkers=[];
+      routeStartLL={lat,lng};
+      const m=L.marker([lat,lng],{icon:makeIcon('A','#22c55e')}).addTo(map)
+        .bindPopup('<b style="color:#22c55e">🟢 Start (A)</b>').openPopup();
+      routeMarkers.push(m);
+      routeStep=1;setStep(1);
+      toast('🏁 Now click to set your DESTINATION (B)');
+    }else if(routeStep===1){
+      const endLL={lat,lng};
+      const m=L.marker([lat,lng],{icon:makeIcon('B','#ef4444')}).addTo(map)
+        .bindPopup('<b style="color:#ef4444">🔴 End (B)</b>').openPopup();
+      routeMarkers.push(m);
+      routeStep=2;
+      routeMode=false;
+      document.getElementById('b-route').classList.remove('ap');
+      document.getElementById('b-route').textContent='▶ Plan Safe Route';
+      document.getElementById('route-steps').style.display='none';
+      document.getElementById('app').classList.remove('route-cursor');
+      await planRoute(routeStartLL,endLL);
+    }
+    return;
+  }
+
+  // ── PREDICT MODE ──
+  const now=new Date();
+  const hour=now.getHours();
+  const {crime_score,crowd_density}=getNearbyMetrics(lat,lng);
+
+  if(clickMarker)map.removeLayer(clickMarker);
+  clickMarker=L.circleMarker([lat,lng],{radius:11,color:'#8b5cf6',weight:2,fill:true,fillColor:'#8b5cf6',fillOpacity:.5})
+    .addTo(map).bindPopup('⚡ Predicting…').openPopup();
+
+  document.getElementById('pred-res').style.display='block';
+  document.getElementById('p-lvl').textContent='Analyzing…';
+  document.getElementById('p-lvl').style.color='#8b5cf6';
+  document.getElementById('p-scr').textContent='IDW-estimated inputs from dataset';
+  document.getElementById('p-hr').textContent=hour;
+  document.getElementById('p-cr').textContent=crime_score;
+  document.getElementById('p-ck').textContent=crowd_density;
+  document.getElementById('pred-api').textContent='';
+
+  const finish=(risk,score,src)=>{
+    const col=RC[risk]||'#8b5cf6';
+    const em=risk==='High'?'🔴':risk==='Moderate'?'🟠':'🟢';
+    document.getElementById('p-lvl').textContent=em+' '+risk;
+    document.getElementById('p-lvl').style.color=col;
+    document.getElementById('p-scr').textContent='Confidence: '+score;
+    document.getElementById('pred-api').textContent=src;
+    const rv=risk==='High'?1.0:risk==='Moderate'?0.5:0.1;
+    predPoints.push([lat,lng,rv]);
+    if(predHeatOn)refreshPredHeat();
+    if(clickMarker)map.removeLayer(clickMarker);
+    clickMarker=L.circleMarker([lat,lng],{radius:12,color:col,weight:2.5,fill:true,fillColor:col,fillOpacity:.65})
+      .addTo(map).bindPopup(`<div style="font-family:'Inter',sans-serif">
+        <b style="color:${col};font-size:13px">${em} ${risk}</b><br/>
+        <small style="color:#aaa">${src}</small>
+        <table style="margin-top:5px;font-size:10.5px">
+          <tr><td style="color:#999">Hour</td><td style="padding-left:8px;font-weight:600">${hour}:00</td></tr>
+          <tr><td style="color:#999">Crime (IDW)</td><td style="padding-left:8px;font-weight:600">${crime_score}</td></tr>
+          <tr><td style="color:#999">Crowd (IDW)</td><td style="padding-left:8px;font-weight:600">${crowd_density}</td></tr>
+        </table></div>`).openPopup();
+  };
+
+  try{
+    if(!apiOnline)throw new Error('offline');
+    const ctrl=new AbortController();
+    setTimeout(()=>ctrl.abort(),5000);
+    const r=await fetch('http://127.0.0.1:5000/predict_risk',{method:'POST',
+      headers:{'Content-Type':'application/json'},signal:ctrl.signal,
+      body:JSON.stringify({lat,long:lng,hour,crime_score,crowd_density})});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    finish(j.level,j.risk_score+'%','✅ Flask AI model');
+  }catch{
+    const rv=localRisk(hour,crime_score,crowd_density);
+    finish(rv,'local est.','⚡ Local model (start Flask API for AI)');
+  }
+});
+
+function localRisk(hour,crime,crowd){
+  const n=(hour>=22||hour<=5)?0.25:0;
+  const s=crime*0.6+crowd*0.15+n;
+  return s>=0.65?'High':s>=0.32?'Moderate':'Safe';
+}
+
+// ═══════════════════════════════════════════
+// MARKER ICON
+// ═══════════════════════════════════════════
+function makeIcon(label,color){
+  return L.divIcon({
+    html:`<div style="width:30px;height:30px;border-radius:50% 50% 50% 0;background:${color};
+      transform:rotate(-45deg);border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);
+      display:flex;align-items:center;justify-content:center">
+      <span style="transform:rotate(45deg);color:#fff;font-weight:700;font-size:12px">${label}</span>
+    </div>`,
+    iconSize:[30,30],iconAnchor:[15,30],popupAnchor:[0,-32],className:''
+  });
+}
+
+// ═══════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════
+let toastTimer;
+function toast(msg,err=false){
+  const el=document.getElementById('toast');
+  el.textContent=msg;
+  el.style.borderColor=err?'var(--red)':'var(--border)';
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>el.classList.remove('show'),3200);
+}
+
+// ═══════════════════════════════════════════
+// CLOCK
+// ═══════════════════════════════════════════
+function tick(){
+  const n=new Date();
+  document.getElementById('clk').textContent=[n.getHours(),n.getMinutes(),n.getSeconds()]
+    .map(x=>String(x).padStart(2,'0')).join(':');
+  document.getElementById('dt').textContent=n.toLocaleDateString('en-IN',
+    {weekday:'long',day:'numeric',month:'long',year:'numeric'});
+}
+setInterval(tick,1000);tick();
+
+// ═══════════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════════
+async function boot(){
+  await checkApi();
+  try{
+    const r=await fetch('./_data.json');
+    if(!r.ok)throw 0;
+    ALL_DATA=await r.json();
+  }catch{
+    ALL_DATA=fallback();
+  }
+  buildRiskGrid();
+  document.getElementById('loading').style.display='none';
+  renderMarkers();
+}
+
+function fallback(){
+  const risks=['High','Moderate','Safe'];
+  return Array.from({length:300},()=>({
+    lat:16.495+Math.random()*.06,lng:80.635+Math.random()*.07,
+    hour:Math.floor(Math.random()*24),
+    crime_score:+Math.random().toFixed(2),
+    crowd_density:+Math.random().toFixed(2),
+    risk:risks[Math.floor(Math.random()*3)]
+  }));
+}
+
+boot();
+</script>
 </body>
 </html>
