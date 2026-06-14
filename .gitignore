@@ -5,3 +5,5 @@ __pycache__/
 *.h5
 .vscode/
 .idea/
+# OSMnx cache
+cache/
