@@ -1,5 +1,5 @@
 """
-SafeHer AI — Milestone 2
+SafeHer AI — Milestone 2 / 3
 backend/api/routes.py
 
 Flask Blueprint: routing_bp
@@ -10,6 +10,7 @@ Endpoints:
   GET  /api/health  — liveness check
 """
 
+import json
 import logging
 
 from flask import Blueprint, request, jsonify
@@ -18,11 +19,63 @@ from core.routing_service import (
     compute_shortest_path,
     find_nearest_node,
     get_graph,
+    get_db_connection,
 )
 
 logger = logging.getLogger(__name__)
 
 routing_bp = Blueprint("routing_bp", __name__, url_prefix="/api")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _fetch_nearby_safe_havens(geojson_geometry: dict) -> list[dict]:
+    """
+    Return safe havens within 200 m of the route LineString.
+
+    geojson_geometry is the 'geometry' sub-dict (type+coordinates) from the
+    route result — NOT the Feature wrapper.
+
+    If the safe_havens table doesn't exist yet, logs a WARNING and returns [].
+    """
+    geojson_str = json.dumps(geojson_geometry)
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT name, category, latitude, longitude
+                FROM safe_havens
+                WHERE ST_DWithin(
+                    geom::geography,
+                    ST_SetSRID(ST_GeomFromGeoJSON(%(geojson_line)s), 4326)::geography,
+                    200
+                );
+                """,
+                {"geojson_line": geojson_str},
+            )
+            rows = cur.fetchall()
+
+        return [
+            {
+                "name":      row[0],
+                "category":  row[1],
+                "latitude":  row[2],
+                "longitude": row[3],
+            }
+            for row in rows
+        ]
+
+    except Exception as exc:
+        # Table may not exist yet — degrade gracefully
+        logger.warning(
+            "Could not query safe_havens (table may not exist yet): %s", exc
+        )
+        return []
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -57,10 +110,11 @@ def route():
 
     Response 200:
         {
-            "distance_meters": float,
-            "node_count":      int,
-            "route_nodes":     [int, ...],
-            "geojson":         { GeoJSON Feature }
+            "distance_meters":    float,
+            "node_count":         int,
+            "route_nodes":        [int, ...],
+            "geojson":            { GeoJSON Feature },
+            "nearby_safe_havens": [ {name, category, latitude, longitude}, ... ]
         }
 
     Response 400: invalid / missing input
@@ -92,6 +146,11 @@ def route():
         start_node = find_nearest_node(start_lat, start_lon)
         end_node   = find_nearest_node(end_lat, end_lon)
         result     = compute_shortest_path(start_node, end_node, G)
+
+        # ── Milestone 3: safe-haven overlay ──────────────────────────────
+        line_geometry = result["geojson"]["geometry"]   # LineString sub-dict only
+        result["nearby_safe_havens"] = _fetch_nearby_safe_havens(line_geometry)
+
         return jsonify(result), 200
 
     except ValueError as exc:
