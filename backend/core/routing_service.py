@@ -1,22 +1,20 @@
 """
-SafeHer AI — Milestone 4
+SafeHer AI — Milestone 5
 backend/core/routing_service.py
 
 Synchronous routing engine using psycopg2 + NetworkX.
 Graph is built ONCE at module load / first access, then cached.
 
-Milestone 4 additions (backward-compatible):
-  • build_graph() LEFT JOINs edge_risk_profiles to store 'distance' and
-    'risk' on every NetworkX edge.
-  • calculate_edge_cost(edge, mode) computes traversal cost dynamically
-    so the graph itself is never mutated when routing modes change.
-  • compute_shortest_path() accepts an optional `mode` argument and
-    returns average_route_risk, minimum_edge_risk, maximum_edge_risk.
-
-Schema (from db/models.py):
-  road_nodes      : osmid (PK), y (lat), x (lon), geom
-  road_edges      : u (source FK), v (target FK), key (INT), length, geom
-  edge_risk_profiles : edge_u, edge_v, edge_key, sri_score
+Milestone 5 additions (backward-compatible):
+  • Immutability preservation: Cached graph is NEVER mutated.
+  • Incident integration: get_active_incident_penalties() is loaded
+    at the start of compute_shortest_path() to apply runtime-only modifiers.
+  • calculate_edge_cost() is updated to dynamically add the incident_penalty
+    to build the effective_risk.
+  • compute_shortest_path() calculates and returns:
+      - effective_average_risk (length-weighted average of effective risk)
+      - high_risk_zones (edges with effective risk > 50.0)
+      - incident_reports_near_route (defaulting to 0, computed via routes.py)
 """
 
 from __future__ import annotations
@@ -27,6 +25,8 @@ import os
 import networkx as nx
 import psycopg2
 from dotenv import load_dotenv
+
+from core.incident_engine import get_active_incident_penalties
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -56,7 +56,7 @@ def _build_database_url() -> str:
 
 
 def get_db_connection() -> psycopg2.extensions.connection:
-    """Return a new psycopg2 connection.  Caller is responsible for closing it."""
+    """Return a new psycopg2 connection. Caller is responsible for closing it."""
     dsn = _build_database_url()
     return psycopg2.connect(dsn)
 
@@ -74,34 +74,39 @@ _VALID_MODES = {"fastest", "balanced", "safest"}
 _DEFAULT_MODE = "fastest"
 
 
-def calculate_edge_cost(edge: dict, mode: str) -> float:
+def calculate_edge_cost(edge: dict, mode: str, incident_penalty: float = 0.0) -> float:
     """
-    Compute the traversal cost for a single edge given a routing mode.
+    Compute the traversal cost for a single edge given a routing mode and incident penalty.
 
     The edge dict must have keys 'distance' (float, metres) and
-    'risk' (float, 0-100).
+    'risk' (float, 0-100 SRI).
+
+    Effective Risk = Base SRI + Incident Penalty (clamped to 100).
 
     Modes
     -----
     fastest  : cost = distance
-    balanced : cost = 0.6 × distance + 0.4 × risk
-    safest   : cost = 0.2 × distance + 0.8 × risk
+    balanced : cost = 0.6 × distance + 0.4 × effective_risk
+    safest   : cost = 0.2 × distance + 0.8 × effective_risk
 
     The graph itself is NEVER modified by this function.
     """
     distance = edge.get("distance", 1.0)
-    risk     = edge.get("risk",     0.0)
+    base_risk = edge.get("risk", 30.0)
+    
+    # Calculate effective risk: Base SRI + dynamic incident penalty (clamped in [0.0, 100.0])
+    effective_risk = max(0.0, min(100.0, base_risk + incident_penalty))
 
     if mode == "balanced":
-        return 0.6 * distance + 0.4 * risk
+        return 0.6 * distance + 0.4 * effective_risk
     if mode == "safest":
-        return 0.2 * distance + 0.8 * risk
+        return 0.2 * distance + 0.8 * effective_risk
     # default: fastest
     return distance
 
 
 # ---------------------------------------------------------------------------
-# Graph construction
+# Graph construction (Milestone 4 - unmodified)
 # ---------------------------------------------------------------------------
 
 def build_graph() -> nx.DiGraph:
@@ -110,12 +115,7 @@ def build_graph() -> nx.DiGraph:
 
     Milestone 4 change: LEFT JOIN with edge_risk_profiles to store both
     'distance' (metres) and 'risk' (0-100 SRI score) on every edge.
-    When no SRI record exists yet, 'risk' defaults to 30.0 (unknown road
-    penalty — matches the sri_engine default for an unscored edge).
-
-    Multi-edge handling (unchanged from Milestone 2):
-    OSMnx may store several edges for the same (u, v) pair.  DiGraph keeps
-    only one edge per (u, v) — we keep the one with the *smallest* length.
+    When no SRI record exists yet, 'risk' defaults to 30.0.
     """
     conn = get_db_connection()
     try:
@@ -150,11 +150,10 @@ def build_graph() -> nx.DiGraph:
 
                 if G.has_edge(source, target):
                     duplicate_count += 1
-                    # Keep the shortest distance (Milestone 2 behaviour)
+                    # Keep the shortest distance
                     if dist_m < G[source][target]["distance"]:
                         G[source][target]["distance"] = dist_m
                         G[source][target]["risk"]     = risk_val
-                        # Keep 'weight' in sync for generic nx algorithms
                         G[source][target]["weight"]   = dist_m
                 else:
                     G.add_edge(
@@ -257,38 +256,32 @@ def compute_shortest_path(
 ) -> dict:
     """
     Compute the shortest path from start_node to end_node in G using
-    Dijkstra's algorithm weighted by calculate_edge_cost(edge, mode).
+    Dijkstra's algorithm weighted by calculate_edge_cost(edge, mode, penalty).
 
-    Milestone 4 additions:
-      The response now includes:
-        average_route_risk   — mean SRI score across all path edges
-        minimum_edge_risk    — lowest SRI score on the path
-        maximum_edge_risk    — highest SRI score on the path
-        risk_category        — category derived from average_route_risk
-
-    Parameters
-    ----------
-    start_node : int
-    end_node   : int
-    G          : nx.DiGraph
-    mode       : str — 'fastest' | 'balanced' | 'safest'
-
-    Returns
-    -------
-    dict with keys:
-        distance_meters, node_count, route_nodes, geojson,
-        average_route_risk, minimum_edge_risk, maximum_edge_risk,
-        risk_category
-
-    Raises ValueError for nx.NetworkXNoPath or nx.NodeNotFound.
+    Milestone 5 additions:
+      • Fetches all active incident penalties in a single database query.
+      • Dynamically incorporates penalties into routing cost without mutating G.
+      • Calculates and returns:
+          - effective_average_risk
+          - high_risk_zones
+          - incident_reports_near_route (defaults to 0, count updated in routes.py)
+      • Preserves all Milestone 4 return parameters for backward compatibility.
     """
     if mode not in _VALID_MODES:
         logger.warning("Unknown routing mode '%s'; defaulting to 'fastest'.", mode)
         mode = _DEFAULT_MODE
 
-    # Weight function passed to Dijkstra — reads edge data dynamically
+    # ── Load dynamic incident penalties ────────────────────────────────────
+    conn = get_db_connection()
+    try:
+        incident_penalties = get_active_incident_penalties(conn)
+    finally:
+        conn.close()
+
+    # Weight function passed to Dijkstra — reads edge attributes + dynamic penalty
     def _weight_fn(u: int, v: int, edge_data: dict) -> float:
-        return calculate_edge_cost(edge_data, mode)
+        penalty = incident_penalties.get((u, v), 0.0)
+        return calculate_edge_cost(edge_data, mode, incident_penalty=penalty)
 
     try:
         path: list[int] = nx.shortest_path(
@@ -301,22 +294,41 @@ def compute_shortest_path(
             f"No path exists between node {start_node} and node {end_node}."
         ) from exc
 
-    # ── Accumulate distance and collect risk values ────────────────────────
+    # ── Accumulate metrics along the path ──────────────────────────────────
     total_distance = 0.0
-    risk_values: list[float] = []
+    total_effective_risk_distance = 0.0
+    
+    base_risks: list[float] = []
+    high_risk_zones = 0
 
     for i in range(len(path) - 1):
-        edge_data = G[path[i]][path[i + 1]]
-        total_distance += edge_data.get("distance", 0.0)
-        risk_values.append(edge_data.get("risk", 30.0))
+        u, v = path[i], path[i + 1]
+        edge_data = G[u][v]
+        dist = edge_data.get("distance", 1.0)
+        base_risk = edge_data.get("risk", 30.0)
+        
+        penalty = incident_penalties.get((u, v), 0.0)
+        effective_risk = max(0.0, min(100.0, base_risk + penalty))
 
-    # ── Route risk statistics ──────────────────────────────────────────────
-    if risk_values:
-        avg_risk = round(sum(risk_values) / len(risk_values), 2)
-        min_risk = round(min(risk_values), 2)
-        max_risk = round(max(risk_values), 2)
+        total_distance += dist
+        total_effective_risk_distance += effective_risk * dist
+        base_risks.append(base_risk)
+
+        if effective_risk > 50.0:
+            high_risk_zones += 1
+
+    # ── Calculate statistics ───────────────────────────────────────────────
+    if base_risks:
+        avg_base_risk = round(sum(base_risks) / len(base_risks), 2)
+        min_base_risk = round(min(base_risks), 2)
+        max_base_risk = round(max(base_risks), 2)
     else:
-        avg_risk = min_risk = max_risk = 0.0
+        avg_base_risk = min_base_risk = max_base_risk = 0.0
+
+    effective_avg_risk = round(
+        (total_effective_risk_distance / total_distance) if total_distance > 0 else 0.0, 
+        2
+    )
 
     def _risk_category(score: float) -> str:
         if score <= 25:
@@ -350,18 +362,22 @@ def compute_shortest_path(
     distance_rounded = round(total_distance, 2)
 
     logger.info(
-        "Route found: %d nodes, %.2fm, mode=%s, avg_risk=%.2f",
-        node_count, distance_rounded, mode, avg_risk,
+        "Route computed: %d nodes, %.2fm, mode=%s, base_avg_risk=%.2f, eff_avg_risk=%.2f",
+        node_count, distance_rounded, mode, avg_base_risk, effective_avg_risk,
     )
 
+    # Output structure keeps all Milestone 4 parameters and adds Milestone 5 ones
     return {
-        "distance_meters":    distance_rounded,
-        "node_count":         node_count,
-        "route_nodes":        path,
-        "average_route_risk": avg_risk,
-        "minimum_edge_risk":  min_risk,
-        "maximum_edge_risk":  max_risk,
-        "risk_category":      _risk_category(avg_risk),
+        "distance_meters":             distance_rounded,
+        "node_count":                  node_count,
+        "route_nodes":                 path,
+        "average_route_risk":          avg_base_risk,     # base SRI stats (compat)
+        "minimum_edge_risk":           min_base_risk,
+        "maximum_edge_risk":           max_base_risk,
+        "risk_category":               _risk_category(avg_base_risk),
+        "effective_average_risk":      effective_avg_risk, # dynamic SRI stats (new)
+        "incident_reports_near_route": 0,                 # set by route API wrapper
+        "high_risk_zones":             high_risk_zones,
         "geojson": {
             "type": "Feature",
             "geometry": {
@@ -369,13 +385,16 @@ def compute_shortest_path(
                 "coordinates": coordinates,
             },
             "properties": {
-                "distance_meters":    distance_rounded,
-                "node_count":         node_count,
-                "mode":               mode,
-                "average_route_risk": avg_risk,
-                "minimum_edge_risk":  min_risk,
-                "maximum_edge_risk":  max_risk,
-                "risk_category":      _risk_category(avg_risk),
+                "distance_meters":             distance_rounded,
+                "node_count":                  node_count,
+                "mode":                        mode,
+                "average_route_risk":          avg_base_risk,
+                "minimum_edge_risk":           min_base_risk,
+                "maximum_edge_risk":           max_base_risk,
+                "risk_category":               _risk_category(avg_base_risk),
+                "effective_average_risk":      effective_avg_risk,
+                "incident_reports_near_route": 0,
+                "high_risk_zones":             high_risk_zones,
             },
         },
     }

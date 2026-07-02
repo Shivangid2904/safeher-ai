@@ -1,5 +1,5 @@
 """
-SafeHer AI — Milestone 4
+SafeHer AI — Milestone 5
 backend/api/routes.py
 
 Flask Blueprint: routing_bp
@@ -9,10 +9,10 @@ Endpoints:
   POST /api/route   — compute route between two lat/lon points
   GET  /api/health  — liveness check
 
-Milestone 4 additions (backward-compatible):
-  • Accepts optional 'mode' field in JSON body (fastest | balanced | safest).
-  • Returns average_route_risk, minimum_edge_risk, maximum_edge_risk,
-    risk_category in the response.
+Milestone 5 additions (backward-compatible):
+  • Accepts 'mode' field in JSON body (fastest | balanced | safest).
+  • Queries the database for active community reports (last 7 days) within 200m of the path.
+  • Returns incident_reports_near_route, effective_average_risk, high_risk_zones.
 """
 
 from __future__ import annotations
@@ -47,8 +47,6 @@ def _fetch_nearby_safe_havens(geojson_geometry: dict) -> list[dict]:
 
     geojson_geometry is the 'geometry' sub-dict (type+coordinates) from the
     route result — NOT the Feature wrapper.
-
-    If the safe_havens table doesn't exist yet, logs a WARNING and returns [].
     """
     geojson_str = json.dumps(geojson_geometry)
     conn = get_db_connection()
@@ -87,8 +85,38 @@ def _fetch_nearby_safe_havens(geojson_geometry: dict) -> list[dict]:
         conn.close()
 
 
+def _count_active_reports_near_route(geojson_geometry: dict) -> int:
+    """
+    Count the number of active community reports (last 7 days) within 200m of the route.
+    """
+    geojson_str = json.dumps(geojson_geometry)
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM community_reports
+                WHERE created_at >= NOW() - INTERVAL '7 days'
+                  AND ST_DWithin(
+                      geom::geography,
+                      ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326)::geography,
+                      200
+                  );
+                """,
+                (geojson_str,)
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+    except Exception as exc:
+        logger.error("Failed to query active reports near route: %s", exc)
+        return 0
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
-# Health check (Milestone 2 endpoint — unchanged)
+# Health Check (Milestone 2 endpoint — unchanged)
 # ---------------------------------------------------------------------------
 
 @routing_bp.get("/health")
@@ -96,7 +124,7 @@ def health():
     return jsonify({
         "status":    "ok",
         "service":   "SafeHer Routing Engine",
-        "milestone": 4,
+        "milestone": 5,
     }), 200
 
 
@@ -120,15 +148,18 @@ def route():
 
     Response 200:
         {
-            "distance_meters":    float,
-            "node_count":         int,
-            "route_nodes":        [int, ...],
-            "average_route_risk": float,
-            "minimum_edge_risk":  float,
-            "maximum_edge_risk":  float,
-            "risk_category":      str,
-            "geojson":            { GeoJSON Feature },
-            "nearby_safe_havens": [ {name, category, latitude, longitude}, ... ]
+            "distance_meters":             float,
+            "node_count":                  int,
+            "route_nodes":                 [int, ...],
+            "average_route_risk":          float,
+            "minimum_edge_risk":           float,
+            "maximum_edge_risk":           float,
+            "risk_category":               str,
+            "effective_average_risk":      float,
+            "incident_reports_near_route": int,
+            "high_risk_zones":             int,
+            "geojson":                     { GeoJSON Feature },
+            "nearby_safe_havens":          [ {name, category, latitude, longitude}, ... ]
         }
 
     Response 400: invalid / missing input
@@ -165,11 +196,20 @@ def route():
         G          = get_graph()
         start_node = find_nearest_node(start_lat, start_lon)
         end_node   = find_nearest_node(end_lat, end_lon)
-        result     = compute_shortest_path(start_node, end_node, G, mode=mode)
+        
+        # Calculate dynamic route using incident engine penalties
+        result = compute_shortest_path(start_node, end_node, G, mode=mode)
 
-        # ── Milestone 3: safe-haven overlay ──────────────────────────────
+        # ── Milestone 3 safe-havens overlay ──────────────────────────────
         line_geometry = result["geojson"]["geometry"]
         result["nearby_safe_havens"] = _fetch_nearby_safe_havens(line_geometry)
+
+        # ── Milestone 5 active reports counter ───────────────────────────
+        reports_count = _count_active_reports_near_route(line_geometry)
+        
+        # Write final values into route response
+        result["incident_reports_near_route"] = reports_count
+        result["geojson"]["properties"]["incident_reports_near_route"] = reports_count
 
         return jsonify(result), 200
 
