@@ -1,14 +1,21 @@
 """
-SafeHer AI — Milestone 2 / 3
+SafeHer AI — Milestone 4
 backend/api/routes.py
 
 Flask Blueprint: routing_bp
 Prefix: /api
 
 Endpoints:
-  POST /api/route   — compute shortest path between two lat/lon points
+  POST /api/route   — compute route between two lat/lon points
   GET  /api/health  — liveness check
+
+Milestone 4 additions (backward-compatible):
+  • Accepts optional 'mode' field in JSON body (fastest | balanced | safest).
+  • Returns average_route_risk, minimum_edge_risk, maximum_edge_risk,
+    risk_category in the response.
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -25,6 +32,9 @@ from core.routing_service import (
 logger = logging.getLogger(__name__)
 
 routing_bp = Blueprint("routing_bp", __name__, url_prefix="/api")
+
+VALID_MODES  = {"fastest", "balanced", "safest"}
+DEFAULT_MODE = "fastest"
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +79,6 @@ def _fetch_nearby_safe_havens(geojson_geometry: dict) -> list[dict]:
         ]
 
     except Exception as exc:
-        # Table may not exist yet — degrade gracefully
         logger.warning(
             "Could not query safe_havens (table may not exist yet): %s", exc
         )
@@ -79,15 +88,15 @@ def _fetch_nearby_safe_havens(geojson_geometry: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Health check
+# Health check (Milestone 2 endpoint — unchanged)
 # ---------------------------------------------------------------------------
 
 @routing_bp.get("/health")
 def health():
     return jsonify({
-        "status": "ok",
-        "service": "SafeHer Routing Engine",
-        "milestone": 2,
+        "status":    "ok",
+        "service":   "SafeHer Routing Engine",
+        "milestone": 4,
     }), 200
 
 
@@ -105,7 +114,8 @@ def route():
             "start_lat": float,
             "start_lon": float,
             "end_lat":   float,
-            "end_lon":   float
+            "end_lon":   float,
+            "mode":      string   (optional, default "fastest")
         }
 
     Response 200:
@@ -113,6 +123,10 @@ def route():
             "distance_meters":    float,
             "node_count":         int,
             "route_nodes":        [int, ...],
+            "average_route_risk": float,
+            "minimum_edge_risk":  float,
+            "maximum_edge_risk":  float,
+            "risk_category":      str,
             "geojson":            { GeoJSON Feature },
             "nearby_safe_havens": [ {name, category, latitude, longitude}, ... ]
         }
@@ -123,7 +137,7 @@ def route():
     """
     data = request.get_json(silent=True)
 
-    # ── validate input ────────────────────────────────────────────────────
+    # ── Validate input ────────────────────────────────────────────────────
     required_fields = ["start_lat", "start_lon", "end_lat", "end_lon"]
     if not data:
         return jsonify({"error": "Request body must be valid JSON."}), 400
@@ -140,15 +154,21 @@ def route():
     except (TypeError, ValueError):
         return jsonify({"error": "All coordinate fields must be valid floats."}), 400
 
-    # ── routing workflow ──────────────────────────────────────────────────
+    # ── Routing mode ──────────────────────────────────────────────────────
+    mode = str(data.get("mode", DEFAULT_MODE)).strip().lower()
+    if mode not in VALID_MODES:
+        logger.warning("Invalid routing mode '%s'; defaulting to 'fastest'.", mode)
+        mode = DEFAULT_MODE
+
+    # ── Routing workflow ──────────────────────────────────────────────────
     try:
-        G          = get_graph()                                # cached — no DB hit
+        G          = get_graph()
         start_node = find_nearest_node(start_lat, start_lon)
         end_node   = find_nearest_node(end_lat, end_lon)
-        result     = compute_shortest_path(start_node, end_node, G)
+        result     = compute_shortest_path(start_node, end_node, G, mode=mode)
 
         # ── Milestone 3: safe-haven overlay ──────────────────────────────
-        line_geometry = result["geojson"]["geometry"]   # LineString sub-dict only
+        line_geometry = result["geojson"]["geometry"]
         result["nearby_safe_havens"] = _fetch_nearby_safe_havens(line_geometry)
 
         return jsonify(result), 200

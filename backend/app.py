@@ -1,8 +1,8 @@
 """
-SafeHer AI — Milestone 3
+SafeHer AI — Milestone 4
 backend/app.py
 
-Entry point for the SafeHer routing + safe-havens Flask application.
+Entry point for the SafeHer routing + safe-havens + SRI Flask application.
 
 Usage:
     cd backend
@@ -24,8 +24,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from flask import Flask, send_from_directory
 from flask_cors import CORS
 
-from api.routes import routing_bp
-from api.safe_havens import safe_havens_bp
+from api.routes       import routing_bp
+from api.safe_havens  import safe_havens_bp
+from api.sri          import sri_bp
 from core.routing_service import get_graph
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,7 @@ def create_app() -> Flask:
     # ── Register API Blueprints ───────────────────────────────────────────
     app.register_blueprint(routing_bp)
     app.register_blueprint(safe_havens_bp)
+    app.register_blueprint(sri_bp)
 
     # ── Warm the graph cache at startup ──────────────────────────────────
     # This ensures the first HTTP request doesn't bear the graph-build cost.

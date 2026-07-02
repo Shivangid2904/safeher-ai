@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SafeHer AI — Safe Route Planner · Vijayawada</title>
-  <meta name="description" content="SafeHer AI helps women navigate Vijayawada safely by computing shortest routes and highlighting nearby police stations, hospitals, and pharmacies." />
+  <meta name="description" content="SafeHer AI helps women navigate Vijayawada safely by computing shortest routes, applying SafeHer Risk Index scoring, and highlighting nearby police stations, hospitals, and pharmacies." />
 
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -33,6 +33,12 @@
       --shadow:      0 8px 32px rgba(0,0,0,0.45);
       --radius:      14px;
       --transition:  0.22s cubic-bezier(.4,0,.2,1);
+
+      /* Risk colours */
+      --risk-low:      #22C55E;
+      --risk-moderate: #EAB308;
+      --risk-high:     #F97316;
+      --risk-critical: #EF4444;
     }
 
     html, body { height: 100%; font-family: 'Inter', system-ui, sans-serif; }
@@ -97,7 +103,7 @@
       border-radius: var(--radius);
       padding: 14px 18px;
       box-shadow: var(--shadow);
-      min-width: 180px;
+      min-width: 200px;
     }
 
     #header-card h1 {
@@ -111,10 +117,52 @@
       margin-bottom: 3px;
     }
 
-    #header-card p {
+    #header-card p.subtitle {
       font-size: 0.7rem;
       color: var(--text-muted);
       font-weight: 400;
+      margin-bottom: 12px;
+    }
+
+    /* ─── Routing mode selector ──────────────────────────────────── */
+    .mode-label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 6px;
+    }
+
+    #routing-mode {
+      width: 100%;
+      background: rgba(124, 58, 237, 0.25);
+      border: 1px solid rgba(167,139,250,0.35);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      font-size: 0.82rem;
+      font-weight: 500;
+      padding: 7px 10px;
+      cursor: pointer;
+      outline: none;
+      transition: border-color var(--transition), background var(--transition);
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23A78BFA' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 30px;
+    }
+
+    #routing-mode:hover,
+    #routing-mode:focus {
+      border-color: var(--brand-light);
+      background-color: rgba(124, 58, 237, 0.35);
+    }
+
+    #routing-mode option {
+      background: #1e1837;
+      color: var(--text);
     }
 
     /* ─── Legend card (top-right) ─────────────────────────────────── */
@@ -179,8 +227,8 @@
       border-radius: var(--radius);
       padding: 16px 20px;
       box-shadow: var(--shadow);
-      min-width: 220px;
-      display: none;        /* hidden until route drawn */
+      min-width: 240px;
+      display: none;
       transition: opacity var(--transition), transform var(--transition);
       opacity: 0;
       transform: translateY(10px);
@@ -229,6 +277,30 @@
       border: none;
       border-top: 1px solid rgba(167,139,250,0.15);
       margin: 10px 0;
+    }
+
+    /* ─── Risk badge ─────────────────────────────────────────────── */
+    #risk-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      transition: background var(--transition), color var(--transition);
+    }
+
+    #risk-badge.low      { background: rgba(34,197,94,0.18);  color: var(--risk-low);      border: 1px solid rgba(34,197,94,0.4); }
+    #risk-badge.moderate { background: rgba(234,179,8,0.18);  color: var(--risk-moderate); border: 1px solid rgba(234,179,8,0.4); }
+    #risk-badge.high     { background: rgba(249,115,22,0.18); color: var(--risk-high);     border: 1px solid rgba(249,115,22,0.4); }
+    #risk-badge.critical { background: rgba(239,68,68,0.18);  color: var(--risk-critical); border: 1px solid rgba(239,68,68,0.4); }
+
+    /* risk value inside badge */
+    #risk-badge .badge-score {
+      font-size: 0.9rem;
     }
 
     /* ─── Error toast ────────────────────────────────────────────── */
@@ -297,10 +369,16 @@
 <!-- ── Map container ─────────────────────────────────────────────── -->
 <div id="map"></div>
 
-<!-- ── Header (brand) ────────────────────────────────────────────── -->
-<div id="header-card" aria-label="SafeHer AI branding">
+<!-- ── Header (brand + mode selector) ──────────────────────────── -->
+<div id="header-card" aria-label="SafeHer AI branding and routing mode">
   <h1>SafeHer AI</h1>
-  <p>Safe Route Planner · Vijayawada</p>
+  <p class="subtitle">Safe Route Planner · Vijayawada</p>
+  <p class="mode-label">Routing Mode</p>
+  <select id="routing-mode" aria-label="Select routing mode">
+    <option value="fastest"  selected>Fastest</option>
+    <option value="balanced">Balanced</option>
+    <option value="safest">Safest</option>
+  </select>
 </div>
 
 <!-- ── Instruction bar ───────────────────────────────────────────── -->
@@ -345,6 +423,22 @@
     <span class="stat-label">Safe havens nearby</span>
     <span class="stat-value" id="stat-havens">—</span>
   </div>
+  <hr class="stat-divider" />
+  <div class="stat-row" style="align-items:flex-start; flex-direction:column; gap:6px;">
+    <span class="stat-label">Average Route Risk</span>
+    <span id="risk-badge" class="low" aria-label="Route risk score">
+      <span class="badge-score" id="badge-score">—</span>
+      <span id="badge-category">—</span>
+    </span>
+  </div>
+  <div class="stat-row" style="margin-top:6px;">
+    <span class="stat-label">Min edge risk</span>
+    <span class="stat-value" id="stat-min-risk">—</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Max edge risk</span>
+    <span class="stat-value" id="stat-max-risk">—</span>
+  </div>
 </div>
 
 <!-- ── Error toast ───────────────────────────────────────────────── -->
@@ -352,7 +446,7 @@
 
 <script>
 // ════════════════════════════════════════════════════════════════════
-//  SafeHer AI — Milestone 3 map frontend
+//  SafeHer AI — Milestone 4 map frontend
 // ════════════════════════════════════════════════════════════════════
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -361,10 +455,16 @@ const summaryPanel   = document.getElementById('summary-panel');
 const statDistance   = document.getElementById('stat-distance');
 const statNodes      = document.getElementById('stat-nodes');
 const statHavens     = document.getElementById('stat-havens');
+const riskBadge      = document.getElementById('risk-badge');
+const badgeScore     = document.getElementById('badge-score');
+const badgeCategory  = document.getElementById('badge-category');
+const statMinRisk    = document.getElementById('stat-min-risk');
+const statMaxRisk    = document.getElementById('stat-max-risk');
 const errorToast     = document.getElementById('error-toast');
+const modeSelect     = document.getElementById('routing-mode');
 
 // ── State ─────────────────────────────────────────────────────────
-let clickState = 0;   // 0 = awaiting start, 1 = awaiting end, 2 = done
+let clickState  = 0;   // 0=awaiting start, 1=awaiting end, 2=done
 let startLatLng = null;
 let endLatLng   = null;
 let startMarker = null;
@@ -380,12 +480,20 @@ const HAVEN_COLORS = {
   pharmacy: '#2E7D32',
 };
 
+// ── Risk category → CSS class ─────────────────────────────────────
+const RISK_CLASSES = {
+  LOW:      'low',
+  MODERATE: 'moderate',
+  HIGH:     'high',
+  CRITICAL: 'critical',
+};
+
 // ─────────────────────────────────────────────────────────────────
 //  Map initialisation
 // ─────────────────────────────────────────────────────────────────
 const map = L.map('map', {
-  center:    [16.5062, 80.6480],
-  zoom:      14,
+  center:      [16.5062, 80.6480],
+  zoom:        14,
   zoomControl: true,
 });
 
@@ -421,21 +529,49 @@ function showError(msg) {
   setTimeout(() => errorToast.classList.remove('show'), 3800);
 }
 
-function showSummary(distance, nodes, havenCount) {
+function showSummary(data) {
+  const distance  = data.distance_meters  || 0;
+  const nodes     = data.node_count       || 0;
+  const havens    = (data.nearby_safe_havens || []).length;
+  const avgRisk   = data.average_route_risk != null ? data.average_route_risk : null;
+  const minRisk   = data.minimum_edge_risk  != null ? data.minimum_edge_risk  : null;
+  const maxRisk   = data.maximum_edge_risk  != null ? data.maximum_edge_risk  : null;
+  const category  = data.risk_category || null;
+
   statDistance.textContent = distance.toLocaleString() + ' m';
   statNodes.textContent    = nodes;
-  statHavens.textContent   = havenCount;
+  statHavens.textContent   = havens;
+
+  if (avgRisk !== null && category) {
+    const cssClass = RISK_CLASSES[category] || 'low';
+    // Remove existing risk classes
+    riskBadge.classList.remove('low', 'moderate', 'high', 'critical');
+    riskBadge.classList.add(cssClass);
+    badgeScore.textContent    = avgRisk.toFixed(1) + ' / 100';
+    badgeCategory.textContent = category;
+    riskBadge.style.display   = 'inline-flex';
+  } else {
+    riskBadge.style.display   = 'none';
+  }
+
+  statMinRisk.textContent = minRisk !== null ? minRisk.toFixed(1) : '—';
+  statMaxRisk.textContent = maxRisk !== null ? maxRisk.toFixed(1) : '—';
+
   summaryPanel.style.display = 'block';
-  // Trigger animation on next frame
   requestAnimationFrame(() => summaryPanel.classList.add('visible'));
 }
 
 function hideSummary() {
   summaryPanel.classList.remove('visible');
-  summaryPanel.style.display = 'none';
-  statDistance.textContent = '—';
-  statNodes.textContent    = '—';
-  statHavens.textContent   = '—';
+  summaryPanel.style.display   = 'none';
+  statDistance.textContent     = '—';
+  statNodes.textContent        = '—';
+  statHavens.textContent       = '—';
+  badgeScore.textContent       = '—';
+  badgeCategory.textContent    = '—';
+  statMinRisk.textContent      = '—';
+  statMaxRisk.textContent      = '—';
+  riskBadge.classList.remove('low','moderate','high','critical');
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -471,11 +607,34 @@ function drawSafeHavens(havens) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+//  Route colour based on risk category
+// ─────────────────────────────────────────────────────────────────
+function routeColourForCategory(category) {
+  const colours = {
+    LOW:      '#22C55E',
+    MODERATE: '#EAB308',
+    HIGH:     '#F97316',
+    CRITICAL: '#EF4444',
+  };
+  return colours[category] || '#38BDF8';
+}
+
+// ─────────────────────────────────────────────────────────────────
 //  Fetch route and render
 // ─────────────────────────────────────────────────────────────────
 async function fetchRoute(start, end) {
+  if (!start || !end) return;
+
   isRouting = true;
-  setInstruction('Routing…', true);
+  setInstruction('Routing\u2026', true);
+
+  // Remove old route but keep markers
+  if (routeLayer)  { map.removeLayer(routeLayer); routeLayer = null; }
+  havenLayers.forEach(l => map.removeLayer(l));
+  havenLayers = [];
+  hideSummary();
+
+  const mode = modeSelect.value;
 
   try {
     const response = await fetch('/api/route', {
@@ -486,6 +645,7 @@ async function fetchRoute(start, end) {
         start_lon: start.lng,
         end_lat:   end.lat,
         end_lon:   end.lng,
+        mode,
       }),
     });
 
@@ -502,15 +662,15 @@ async function fetchRoute(start, end) {
     const coords = data.geojson?.geometry?.coordinates || [];
     if (coords.length > 0) {
       const latLngs = coords.map(([lon, lat]) => [lat, lon]);
+      const colour  = routeColourForCategory(data.risk_category);
       routeLayer = L.polyline(latLngs, {
-        color:   '#38BDF8',
+        color:   colour,
         weight:  5,
-        opacity: 0.8,
+        opacity: 0.85,
         lineCap: 'round',
         lineJoin:'round',
       }).addTo(map);
 
-      // Fit map to route bounds
       map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
     }
 
@@ -519,7 +679,7 @@ async function fetchRoute(start, end) {
     drawSafeHavens(havens);
 
     // ── Update summary panel ──────────────────────────────────────
-    showSummary(data.distance_meters, data.node_count, havens.length);
+    showSummary(data);
     setInstruction('Click to plan a new route');
 
   } catch (err) {
@@ -532,10 +692,19 @@ async function fetchRoute(start, end) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+//  Routing mode change — recalculate if route already exists
+// ─────────────────────────────────────────────────────────────────
+modeSelect.addEventListener('change', () => {
+  if (clickState === 2 && startLatLng && endLatLng && !isRouting) {
+    fetchRoute(startLatLng, endLatLng);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────
 //  Map click — state machine
 // ─────────────────────────────────────────────────────────────────
 map.on('click', (e) => {
-  if (isRouting) return;   // ignore clicks while fetching
+  if (isRouting) return;
 
   const { lat, lng } = e.latlng;
 
@@ -565,6 +734,7 @@ map.on('click', (e) => {
     startMarker = L.marker([lat, lng], { icon: makePinIcon('start') })
       .bindTooltip('Start', { permanent: false })
       .addTo(map);
+    endLatLng  = null;
     clickState = 1;
     setInstruction('Click to set destination');
   }

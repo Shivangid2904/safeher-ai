@@ -1,14 +1,25 @@
 """
-SafeHer AI — Milestone 2
+SafeHer AI — Milestone 4
 backend/core/routing_service.py
 
 Synchronous routing engine using psycopg2 + NetworkX.
 Graph is built ONCE at module load / first access, then cached.
 
+Milestone 4 additions (backward-compatible):
+  • build_graph() LEFT JOINs edge_risk_profiles to store 'distance' and
+    'risk' on every NetworkX edge.
+  • calculate_edge_cost(edge, mode) computes traversal cost dynamically
+    so the graph itself is never mutated when routing modes change.
+  • compute_shortest_path() accepts an optional `mode` argument and
+    returns average_route_risk, minimum_edge_risk, maximum_edge_risk.
+
 Schema (from db/models.py):
-  road_nodes : osmid (PK, BigInteger), y (lat, Float), x (lon, Float), geom
-  road_edges : u (source FK), v (target FK), key (INT), length (Float), geom
+  road_nodes      : osmid (PK), y (lat), x (lon), geom
+  road_edges      : u (source FK), v (target FK), key (INT), length, geom
+  edge_risk_profiles : edge_u, edge_v, edge_key, sri_score
 """
+
+from __future__ import annotations
 
 import logging
 import os
@@ -27,6 +38,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 load_dotenv()
 
+
 def _build_database_url() -> str:
     """
     Prefer DATABASE_URL env var; fall back to individual POSTGRES_* vars
@@ -35,11 +47,11 @@ def _build_database_url() -> str:
     url = os.getenv("DATABASE_URL")
     if url:
         return url
-    user = os.getenv("POSTGRES_USER", "safeher_user")
+    user     = os.getenv("POSTGRES_USER",     "safeher_user")
     password = os.getenv("POSTGRES_PASSWORD", "safeher_pass")
-    host = os.getenv("POSTGRES_HOST", "localhost")
-    port = os.getenv("POSTGRES_PORT", "5432")
-    db = os.getenv("POSTGRES_DB", "safeher")
+    host     = os.getenv("POSTGRES_HOST",     "localhost")
+    port     = os.getenv("POSTGRES_PORT",     "5432")
+    db       = os.getenv("POSTGRES_DB",       "safeher")
     return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 
@@ -55,64 +67,106 @@ def get_db_connection() -> psycopg2.extensions.connection:
 _graph: nx.DiGraph | None = None
 
 
+# ---------------------------------------------------------------------------
+# Dynamic edge cost (never mutates the graph)
+# ---------------------------------------------------------------------------
+_VALID_MODES = {"fastest", "balanced", "safest"}
+_DEFAULT_MODE = "fastest"
+
+
+def calculate_edge_cost(edge: dict, mode: str) -> float:
+    """
+    Compute the traversal cost for a single edge given a routing mode.
+
+    The edge dict must have keys 'distance' (float, metres) and
+    'risk' (float, 0-100).
+
+    Modes
+    -----
+    fastest  : cost = distance
+    balanced : cost = 0.6 × distance + 0.4 × risk
+    safest   : cost = 0.2 × distance + 0.8 × risk
+
+    The graph itself is NEVER modified by this function.
+    """
+    distance = edge.get("distance", 1.0)
+    risk     = edge.get("risk",     0.0)
+
+    if mode == "balanced":
+        return 0.6 * distance + 0.4 * risk
+    if mode == "safest":
+        return 0.2 * distance + 0.8 * risk
+    # default: fastest
+    return distance
+
+
+# ---------------------------------------------------------------------------
+# Graph construction
+# ---------------------------------------------------------------------------
+
 def build_graph() -> nx.DiGraph:
     """
     Load ALL road_nodes and road_edges from PostGIS into a NetworkX DiGraph.
 
-    Node key  : osmid  (BigInteger, the primary key of road_nodes)
-    Node attrs: lat (y column), lon (x column)
-    Edge weight: length in metres (road_edges.length); defaults to 1.0 when NULL.
+    Milestone 4 change: LEFT JOIN with edge_risk_profiles to store both
+    'distance' (metres) and 'risk' (0-100 SRI score) on every edge.
+    When no SRI record exists yet, 'risk' defaults to 30.0 (unknown road
+    penalty — matches the sri_engine default for an unscored edge).
 
-    Multi-edge handling: OSMnx may store several edges for the same (u, v) pair
-    (different OSM key values). DiGraph keeps only one edge per (u, v) — we
-    keep the one with the *smallest* length.
+    Multi-edge handling (unchanged from Milestone 2):
+    OSMnx may store several edges for the same (u, v) pair.  DiGraph keeps
+    only one edge per (u, v) — we keep the one with the *smallest* length.
     """
     conn = get_db_connection()
     try:
         G = nx.DiGraph()
 
-        # ── nodes ────────────────────────────────────────────────────────────
+        # ── nodes ─────────────────────────────────────────────────────────
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT osmid, y, x FROM road_nodes;"
-            )
+            cur.execute("SELECT osmid, y, x FROM road_nodes;")
             for osmid, y, x in cur.fetchall():
                 G.add_node(int(osmid), lat=float(y), lon=float(x))
 
-        # ── edges ────────────────────────────────────────────────────────────
+        # ── edges (with SRI join) ─────────────────────────────────────────
         duplicate_count = 0
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT u, v, length FROM road_edges;"
-            )
-            for u, v, length in cur.fetchall():
-                source = int(u)
-                target = int(v)
-
-                if length is None:
-                    logger.warning(
-                        "NULL length on edge (%s -> %s); defaulting to 1.0",
-                        source, target
-                    )
-                    length_m = 1.0
-                else:
-                    length_m = float(length)
+            cur.execute("""
+                SELECT
+                    re.u,
+                    re.v,
+                    re.length,
+                    COALESCE(erp.sri_score, 30.0) AS risk
+                FROM road_edges re
+                LEFT JOIN edge_risk_profiles erp
+                    ON  erp.edge_u   = re.u
+                    AND erp.edge_v   = re.v
+                    AND erp.edge_key = re.key;
+            """)
+            for u, v, length, risk in cur.fetchall():
+                source   = int(u)
+                target   = int(v)
+                dist_m   = float(length) if length is not None else 1.0
+                risk_val = float(risk)   if risk   is not None else 30.0
 
                 if G.has_edge(source, target):
                     duplicate_count += 1
-                    current_weight = G[source][target]["weight"]
-                    if length_m < current_weight:
-                        G[source][target]["weight"] = length_m
-                    # else: keep existing shorter edge — do nothing
+                    # Keep the shortest distance (Milestone 2 behaviour)
+                    if dist_m < G[source][target]["distance"]:
+                        G[source][target]["distance"] = dist_m
+                        G[source][target]["risk"]     = risk_val
+                        # Keep 'weight' in sync for generic nx algorithms
+                        G[source][target]["weight"]   = dist_m
                 else:
-                    G.add_edge(source, target, weight=length_m)
+                    G.add_edge(
+                        source, target,
+                        distance=dist_m,
+                        risk=risk_val,
+                        weight=dist_m,      # backward-compat alias
+                    )
 
         logger.info(
-            "Graph loaded: %d nodes, %d edges",
-            G.number_of_nodes(), G.number_of_edges()
-        )
-        logger.info(
-            "Duplicate edges encountered and resolved: %d", duplicate_count
+            "Graph loaded: %d nodes, %d edges (duplicates resolved: %d)",
+            G.number_of_nodes(), G.number_of_edges(), duplicate_count,
         )
         return G
 
@@ -188,7 +242,6 @@ def get_edge_geometry(
         row = cur.fetchone()
         if row is None or row[0] is None:
             return []
-        # row[0] is already a Python list of [lon, lat] lists (psycopg2 + json cast)
         return row[0]
 
 
@@ -200,27 +253,47 @@ def compute_shortest_path(
     start_node: int,
     end_node: int,
     G: nx.DiGraph,
+    mode: str = "fastest",
 ) -> dict:
     """
     Compute the shortest path from start_node to end_node in G using
-    Dijkstra's algorithm weighted by 'weight' (metres).
+    Dijkstra's algorithm weighted by calculate_edge_cost(edge, mode).
 
-    Returns:
-        {
-          "distance_meters": float,
-          "node_count": int,
-          "route_nodes": [int, ...],
-          "geojson": {
-            "type": "Feature",
-            "geometry": {"type": "LineString", "coordinates": [[lon, lat], ...]},
-            "properties": {"distance_meters": float, "node_count": int}
-          }
-        }
+    Milestone 4 additions:
+      The response now includes:
+        average_route_risk   — mean SRI score across all path edges
+        minimum_edge_risk    — lowest SRI score on the path
+        maximum_edge_risk    — highest SRI score on the path
+        risk_category        — category derived from average_route_risk
+
+    Parameters
+    ----------
+    start_node : int
+    end_node   : int
+    G          : nx.DiGraph
+    mode       : str — 'fastest' | 'balanced' | 'safest'
+
+    Returns
+    -------
+    dict with keys:
+        distance_meters, node_count, route_nodes, geojson,
+        average_route_risk, minimum_edge_risk, maximum_edge_risk,
+        risk_category
 
     Raises ValueError for nx.NetworkXNoPath or nx.NodeNotFound.
     """
+    if mode not in _VALID_MODES:
+        logger.warning("Unknown routing mode '%s'; defaulting to 'fastest'.", mode)
+        mode = _DEFAULT_MODE
+
+    # Weight function passed to Dijkstra — reads edge data dynamically
+    def _weight_fn(u: int, v: int, edge_data: dict) -> float:
+        return calculate_edge_cost(edge_data, mode)
+
     try:
-        path: list[int] = nx.shortest_path(G, start_node, end_node, weight="weight")
+        path: list[int] = nx.shortest_path(
+            G, start_node, end_node, weight=_weight_fn
+        )
     except nx.NodeNotFound as exc:
         raise ValueError(f"Node not found in graph: {exc}") from exc
     except nx.NetworkXNoPath as exc:
@@ -228,13 +301,33 @@ def compute_shortest_path(
             f"No path exists between node {start_node} and node {end_node}."
         ) from exc
 
-    # ── accumulate distance ───────────────────────────────────────────────
+    # ── Accumulate distance and collect risk values ────────────────────────
     total_distance = 0.0
+    risk_values: list[float] = []
+
     for i in range(len(path) - 1):
         edge_data = G[path[i]][path[i + 1]]
-        total_distance += edge_data.get("weight", 0.0)
+        total_distance += edge_data.get("distance", 0.0)
+        risk_values.append(edge_data.get("risk", 30.0))
 
-    # ── fetch geometry from PostGIS ───────────────────────────────────────
+    # ── Route risk statistics ──────────────────────────────────────────────
+    if risk_values:
+        avg_risk = round(sum(risk_values) / len(risk_values), 2)
+        min_risk = round(min(risk_values), 2)
+        max_risk = round(max(risk_values), 2)
+    else:
+        avg_risk = min_risk = max_risk = 0.0
+
+    def _risk_category(score: float) -> str:
+        if score <= 25:
+            return "LOW"
+        if score <= 50:
+            return "MODERATE"
+        if score <= 75:
+            return "HIGH"
+        return "CRITICAL"
+
+    # ── Fetch geometry from PostGIS ────────────────────────────────────────
     coordinates: list[list[float]] = []
     conn = get_db_connection()
     try:
@@ -246,7 +339,6 @@ def compute_shortest_path(
                     "No geometry for edge (%d -> %d), skipping", src, tgt
                 )
                 continue
-            # Avoid duplicating the junction point between consecutive edges
             if coordinates and coords:
                 coordinates.extend(coords[1:])
             else:
@@ -254,17 +346,22 @@ def compute_shortest_path(
     finally:
         conn.close()
 
-    node_count = len(path)
+    node_count       = len(path)
     distance_rounded = round(total_distance, 2)
 
     logger.info(
-        "Route found: %d nodes, %.2fm", node_count, distance_rounded
+        "Route found: %d nodes, %.2fm, mode=%s, avg_risk=%.2f",
+        node_count, distance_rounded, mode, avg_risk,
     )
 
     return {
-        "distance_meters": distance_rounded,
-        "node_count": node_count,
-        "route_nodes": path,
+        "distance_meters":    distance_rounded,
+        "node_count":         node_count,
+        "route_nodes":        path,
+        "average_route_risk": avg_risk,
+        "minimum_edge_risk":  min_risk,
+        "maximum_edge_risk":  max_risk,
+        "risk_category":      _risk_category(avg_risk),
         "geojson": {
             "type": "Feature",
             "geometry": {
@@ -272,8 +369,13 @@ def compute_shortest_path(
                 "coordinates": coordinates,
             },
             "properties": {
-                "distance_meters": distance_rounded,
-                "node_count": node_count,
+                "distance_meters":    distance_rounded,
+                "node_count":         node_count,
+                "mode":               mode,
+                "average_route_risk": avg_risk,
+                "minimum_edge_risk":  min_risk,
+                "maximum_edge_risk":  max_risk,
+                "risk_category":      _risk_category(avg_risk),
             },
         },
     }
