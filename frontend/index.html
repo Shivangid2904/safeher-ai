@@ -40,12 +40,19 @@
       --risk-high:     #F97316;
       --risk-critical: #EF4444;
 
+      /* Safety Score Levels */
+      --safety-safe:       #22C55E; /* Green */
+      --safety-low-risk:   #84CC16; /* Light Green */
+      --safety-moderate:   #EAB308; /* Yellow */
+      --safety-high-risk:  #F97316; /* Orange */
+      --safety-critical:   #EF4444; /* Red */
+
       /* Incident Marker Colors */
-      --inc-harassment: #EF4444; /* Red */
-      --inc-stalking:   #A855F7; /* Purple */
-      --inc-lighting:   #F97316; /* Orange */
-      --inc-unsafe:     #1E1B4B; /* Dark Black/Navy */
-      --inc-suspicious: #EAB308; /* Yellow */
+      --inc-harassment: #EF4444;
+      --inc-stalking:   #A855F7;
+      --inc-lighting:   #F97316;
+      --inc-unsafe:     #1E1B4B;
+      --inc-suspicious: #EAB308;
     }
 
     html, body { height: 100%; font-family: 'Inter', system-ui, sans-serif; }
@@ -230,7 +237,7 @@
       border-radius: var(--radius);
       padding: 14px 16px;
       box-shadow: var(--shadow);
-      max-height: 90vh;
+      max-height: 40vh;
       overflow-y: auto;
       width: 180px;
     }
@@ -280,6 +287,141 @@
       background: var(--route);
       flex-shrink: 0;
     }
+
+    /* ─── Safety Analysis Card (middle-right) ─────────────────────── */
+    #analysis-card {
+      position: absolute;
+      top: 360px;
+      right: 18px;
+      z-index: 1000;
+      background: var(--surface-hi);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(167,139,250,0.22);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      box-shadow: var(--shadow);
+      width: 320px;
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+      max-height: calc(100vh - 390px);
+      overflow-y: auto;
+      transition: opacity var(--transition), transform var(--transition);
+      opacity: 0;
+      transform: translateY(10px);
+    }
+
+    #analysis-card.visible {
+      display: flex;
+      opacity: 1;
+      transform: translateY(0);
+      animation: slideUp var(--transition) forwards;
+    }
+
+    #analysis-card h2 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      border-bottom: 1px solid rgba(167,139,250,0.15);
+      padding-bottom: 6px;
+    }
+
+    /* Safety Score Ring Display */
+    .safety-score-display {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .score-circle {
+      position: relative;
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: rgba(15, 12, 30, 0.9);
+      border: 3px solid var(--brand-light);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .score-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .score-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    .score-level-badge {
+      display: inline-block;
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .score-confidence {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    /* Factor Lists styling */
+    .factor-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .factor-title {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .factor-title.positive { color: var(--safety-safe); }
+    .factor-title.negative { color: var(--safety-critical); }
+    .factor-title.recs { color: var(--brand-light); }
+
+    .factor-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-left: 0;
+    }
+
+    .factor-list li {
+      font-size: 0.72rem;
+      line-height: 1.3;
+      position: relative;
+      padding-left: 12px;
+      color: var(--text);
+    }
+
+    .factor-list li::before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      top: 0;
+      font-size: 0.8rem;
+    }
+
+    .factor-list.positive li::before { color: var(--safety-safe); }
+    .factor-list.negative li::before { color: var(--safety-critical); }
+    .factor-list.recs li::before { color: var(--brand-light); }
 
     /* ─── Summary panel (bottom-left) ───────────────────────────── */
     #summary-panel {
@@ -548,6 +690,41 @@
   </div>
 </div>
 
+<!-- ── Route safety analysis card ────────────────────────────────── -->
+<div id="analysis-card" role="region" aria-label="Route safety analysis">
+  <h2>Route Safety Analysis</h2>
+  
+  <div class="safety-score-display">
+    <div class="score-circle" id="score-circle-value">—</div>
+    <div class="score-meta">
+      <span class="score-label">Safety Level</span>
+      <span class="score-level-badge" id="score-level-label">—</span>
+      <span class="score-confidence" id="score-confidence-val">Confidence: —</span>
+    </div>
+  </div>
+
+  <div class="factor-section" id="pos-factors-container">
+    <span class="factor-title positive">Positive Factors</span>
+    <ul class="factor-list positive" id="pos-factors-list">
+      <li>Computing...</li>
+    </ul>
+  </div>
+
+  <div class="factor-section" id="neg-factors-container">
+    <span class="factor-title negative">Negative Factors</span>
+    <ul class="factor-list negative" id="neg-factors-list">
+      <li>Computing...</li>
+    </ul>
+  </div>
+
+  <div class="factor-section" id="recs-container">
+    <span class="factor-title recs">Recommendations</span>
+    <ul class="factor-list recs" id="recs-list">
+      <li>Computing...</li>
+    </ul>
+  </div>
+</div>
+
 <!-- ── Route summary panel ───────────────────────────────────────── -->
 <div id="summary-panel" role="region" aria-label="Route summary">
   <h2>Route Summary</h2>
@@ -631,7 +808,7 @@
 
 <script>
 // ════════════════════════════════════════════════════════════════════
-//  SafeHer AI — Milestone 5 Map Frontend
+//  SafeHer AI — Milestone 6 Map Frontend
 // ════════════════════════════════════════════════════════════════════
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -647,6 +824,15 @@ const effRiskBadge     = document.getElementById('effective-risk-badge');
 const errorToast       = document.getElementById('error-toast');
 const modeSelect       = document.getElementById('routing-mode');
 
+// Safety Analysis DOM refs
+const analysisCard       = document.getElementById('analysis-card');
+const scoreCircleValue   = document.getElementById('score-circle-value');
+const scoreLevelLabel    = document.getElementById('score-level-label');
+const scoreConfidenceVal = document.getElementById('score-confidence-val');
+const posFactorsList     = document.getElementById('pos-factors-list');
+const negFactorsList     = document.getElementById('neg-factors-list');
+const recsList           = document.getElementById('recs-list');
+
 // Reporting DOM refs
 const btnReportToggle  = document.getElementById('btn-report-toggle');
 const btnRefresh       = document.getElementById('btn-refresh');
@@ -660,7 +846,7 @@ const btnReportCancel  = document.getElementById('btn-report-cancel');
 
 // ── State ─────────────────────────────────────────────────────────
 let clickState    = 0;   // 0 = awaiting start, 1 = awaiting end, 2 = done
-let isReportingMode = false; // toggle reporting click mode
+let isReportingMode = false;
 let startLatLng   = null;
 let endLatLng     = null;
 let startMarker   = null;
@@ -684,6 +870,15 @@ const RISK_BADGE_CLASSES = {
   MODERATE: 'moderate',
   HIGH:     'high',
   CRITICAL: 'critical',
+};
+
+// ── Safety Score Scale Colors ─────────────────────────────────────
+const SAFETY_LEVEL_COLORS = {
+  'SAFE':          'var(--safety-safe)',
+  'LOW RISK':      'var(--safety-low-risk)',
+  'MODERATE':      'var(--safety-moderate)',
+  'HIGH RISK':     'var(--safety-high-risk)',
+  'CRITICAL':      'var(--safety-critical)',
 };
 
 // ─────────────────────────────────────────────────────────────────
@@ -766,6 +961,33 @@ function hideSummary() {
   effRiskBadge.className   = 'risk-badge low';
 }
 
+function showAnalysis(analysis) {
+  const score = analysis.safety_score;
+  const level = analysis.safety_level;
+  const color = SAFETY_LEVEL_COLORS[level] || 'var(--text-muted)';
+  
+  scoreCircleValue.textContent = Math.round(score);
+  scoreCircleValue.style.borderColor = color;
+  
+  scoreLevelLabel.textContent = level;
+  scoreLevelLabel.style.color = color;
+  
+  scoreConfidenceVal.textContent = `Confidence: ${(analysis.confidence * 100).toFixed(0)}%`;
+
+  // Render factors
+  posFactorsList.innerHTML = analysis.positive_factors.map(f => `<li>${f}</li>`).join('') || '<li>No positive safety factors noted for this route.</li>';
+  negFactorsList.innerHTML = analysis.negative_factors.map(f => `<li>${f}</li>`).join('') || '<li>No negative safety factors noted for this route.</li>';
+  recsList.innerHTML       = analysis.recommendations.map(r => `<li>${r}</li>`).join('') || '<li>No safety recommendations.</li>';
+
+  analysisCard.style.display = 'flex';
+  requestAnimationFrame(() => analysisCard.classList.add('visible'));
+}
+
+function hideAnalysis() {
+  analysisCard.classList.remove('visible');
+  analysisCard.style.display = 'none';
+}
+
 function clearAll() {
   if (startMarker) { map.removeLayer(startMarker); startMarker = null; }
   if (endMarker)   { map.removeLayer(endMarker);   endMarker   = null; }
@@ -773,6 +995,7 @@ function clearAll() {
   havenLayers.forEach(l => map.removeLayer(l));
   havenLayers = [];
   hideSummary();
+  hideAnalysis();
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -784,11 +1007,9 @@ async function fetchReports() {
     if (!response.ok) throw new Error('Failed to fetch reports');
     const data = await response.json();
     
-    // Clear old report layers
     reportLayers.forEach(l => map.removeLayer(l));
     reportLayers = [];
     
-    // Render report circles
     const reports = data.reports || [];
     reports.forEach(r => {
       const color = INCIDENT_COLORS[r.category] || '#888';
@@ -819,14 +1040,16 @@ async function fetchReports() {
 }
 
 // ─────────────────────────────────────────────────────────────────
-//  Fetch route and render
+//  Fetch route with safety analysis and render
 // ─────────────────────────────────────────────────────────────────
 async function fetchRoute(start, end) {
   isRouting = true;
   setInstruction('Routing…', 'routing');
+  hideAnalysis();
 
   try {
-    const response = await fetch('/api/route', {
+    // Milestone 6 update: Call /api/route/analyze instead of /api/route
+    const response = await fetch('/api/route/analyze', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -847,8 +1070,11 @@ async function fetchRoute(start, end) {
       return;
     }
 
-    // ── Draw route polyline (Must remain BLUE in Milestone 5) ────────
-    const coords = data.geojson?.geometry?.coordinates || [];
+    const routeData = data.route;
+    const analysis  = data.analysis;
+
+    // ── Draw route polyline (Must remain BLUE in Milestone 6) ────────
+    const coords = routeData.geojson?.geometry?.coordinates || [];
     if (coords.length > 0) {
       const latLngs = coords.map(([lon, lat]) => [lat, lon]);
       
@@ -870,7 +1096,7 @@ async function fetchRoute(start, end) {
     // ── Draw nearby safe havens ──────────────────────────────────
     havenLayers.forEach(l => map.removeLayer(l));
     havenLayers = [];
-    (data.nearby_safe_havens || []).forEach(h => {
+    (routeData.nearby_safe_havens || []).forEach(h => {
       const havenColor = h.category === 'police' ? '#1565C0' : (h.category === 'hospital' ? '#C62828' : '#2E7D32');
       const circle = L.circleMarker([h.latitude, h.longitude], {
         radius:      8,
@@ -884,8 +1110,9 @@ async function fetchRoute(start, end) {
       havenLayers.push(circle);
     });
 
-    // ── Update summary panel ──────────────────────────────────────
-    showSummary(data);
+    // ── Update summary panel & Safety Analysis Card ───────────────
+    showSummary(routeData);
+    showAnalysis(analysis);
     setInstruction('Click to plan a new route');
 
   } catch (err) {
@@ -960,10 +1187,8 @@ btnReportSubmit.addEventListener('click', async () => {
     reportModal.classList.remove('visible');
     resetReportingState();
     
-    // Automatically reload markers
     await fetchReports();
     
-    // If routing was already active, recalculate it dynamically
     if (clickState === 2 && startLatLng && endLatLng) {
       fetchRoute(startLatLng, endLatLng);
     }
@@ -988,14 +1213,12 @@ map.on('click', (e) => {
   const { lat, lng } = e.latlng;
 
   if (isReportingMode) {
-    // Reporting incident click
     reportCoords.value = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
     reportDescription.value = '';
     reportModal.classList.add('visible');
     return;
   }
 
-  // Routing clicks
   if (clickState === 0) {
     clearAll();
     startLatLng = e.latlng;
