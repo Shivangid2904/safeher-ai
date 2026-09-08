@@ -2,11 +2,11 @@
 
 ## AI-Powered Safe Route Recommendation Platform
 
-**Status:** Active Development (Prototype)
+**Status:** Active Development
 
-SafeHer AI is a geospatial safety platform designed to recommend safer travel routes rather than simply the shortest or fastest paths. The project combines Geographic Information Systems (GIS), graph algorithms, spatial databases, and machine learning to build an intelligent navigation system focused on personal safety.
+SafeHer AI is a geospatial safety platform designed to recommend safer travel routes rather than simply the shortest or fastest paths. The project combines Geographic Information Systems (GIS), graph algorithms, spatial databases, and safety analysis engines to build an intelligent navigation system focused on personal safety.
 
-The current repository contains the working prototype, including the routing infrastructure, spatial database, and interactive route visualization. Future development will introduce AI-powered risk scoring, explainability, community intelligence, and privacy-preserving safety features.
+The platform integrates geospatial spatial database infrastructure, multi-objective routing (fastest, balanced, safest), a Safe Haven system, SafeHer Risk Index (SRI) scoring, dynamic community incident-aware routing, and explainable route safety analysis. Future development focuses on ML-based scoring (SHAP), user trust reputation systems, real-time navigation recalculation, and privacy-preserving safety features.
 
 ---
 
@@ -24,7 +24,7 @@ SafeHer AI answers:
 
 > "What is the safest route given the current conditions?"
 
-The complete platform is designed around four major pillars:
+The platform is designed around four major pillars:
 
 - Geospatial Routing
 - Risk Intelligence
@@ -48,10 +48,10 @@ The complete platform is designed around four major pillars:
 ## Routing Engine
 
 - Directed road graph built using NetworkX
-- Shortest-path computation
+- Shortest-path computation with support for multi-objective routing (`fastest`, `balanced`, `safest`)
 - Graph caching for improved performance
-- GeoJSON route generation
-- Flask REST API
+- GeoJSON route generation with edge-by-edge risk metadata
+- Flask REST API (`/api/route`)
 
 ---
 
@@ -63,7 +63,34 @@ SafeHer currently supports spatial querying and visualization of nearby:
 - Hospitals
 - Pharmacies
 
-Safe Havens are imported from OpenStreetMap and linked to generated routes.
+Safe Havens are imported from OpenStreetMap into PostGIS and linked to generated routes within a 200m spatial buffer.
+
+---
+
+## SafeHer Risk Index (SRI)
+
+- Base rule-based edge risk profiling scoring road segments from 0 (safest) to 100 (highest risk) based on road type penalties, lighting status, segment length, and safe haven proximity (Milestone 4)
+- Persistent edge risk storage in PostGIS (`edge_risk_profiles`) with detailed risk attribution breakdowns
+- REST API for SRI statistics (`/api/sri/statistics`) and individual edge profiles (`/api/sri/edge`)
+- Effective risk calculation at routing time combining edge length, base SRI risk, and active Milestone 5 community incident penalties
+
+---
+
+## Dynamic Community Incident-Aware Routing
+
+- Community incident report submission (`POST /api/reports`) and spatial querying (`/api/reports/nearby`, `/api/reports/statistics`)
+- Dynamic distance-based penalty calculation (up to 200 m) combined with a 7-day exponential time-decay model
+- Runtime edge risk overlay calculated dynamically during route computation without mutating base SRI scores or the immutable graph cache
+- Route optimization automatically penalizes and avoids road segments with active incident reports
+
+---
+
+## Route Safety Analysis & Explainability
+
+- Deterministic rule-based route safety assessment engine (`/api/route/analyze`)
+- 0–100 overall route safety score and safety level classification (`SAFE`, `LOW RISK`, `MODERATE`, `HIGH RISK`, `CRITICAL`)
+- Detailed feature extraction including effective route risk, high risk zone counts, active incident counts, and safe haven counts
+- Contextual factor attribution (positive & negative factors) and deterministic safety recommendations derived from extracted route features
 
 ---
 
@@ -71,137 +98,92 @@ Safe Havens are imported from OpenStreetMap and linked to generated routes.
 
 A browser-based interface built using Leaflet allows users to:
 
-- Select start location
-- Select destination
-- Generate a route
-- Visualize nearby Safe Havens
-- Display route statistics
+- Select start location and destination
+- Choose routing mode (`fastest`, `balanced`, `safest`)
+- Generate routes with edge-level risk coloring
+- Visualize nearby Safe Havens and community incident reports
+- Submit community incident reports directly from the interface
+- View interactive Safety Analysis panel displaying safety score, confidence rating, positive/negative contributing factors, and recommendations
 
 ---
 
 # Current Architecture
 
 ```
-                    Leaflet Frontend
-                           │
-                    Flask REST API
-                           │
-            ┌──────────────┴──────────────┐
-            │                             │
-     Routing Service             Safe Haven Service
-            │                             │
-            └──────────────┬──────────────┘
-                           │
-                    PostgreSQL/PostGIS
-                           │
-                 OpenStreetMap Road Graph
+                                Leaflet Frontend
+                                       │
+                                Flask REST API
+                                       │
+ ┌───────────────────┬─────────────────┼───────────────────┬──────────────────┐
+ │                   │                 │                   │                  │
+Routing Service   Safe Haven Service  SRI Engine    Incident Engine    Route Analyzer & Safety Score Engine
+(NetworkX Cache)    (Spatial Query)  (Base Scoring) (Dynamic Overlay)   (Rule Assessment)
+ │                   │                 │                   │                  │
+ └───────────────────┴─────────────────┼───────────────────┴──────────────────┘
+                                       │
+                  PostgreSQL / PostGIS (Spatial DB / Source of Truth)
+                                       │
+                     OpenStreetMap Road Data (OSMnx Import)
 ```
+
+- **PostgreSQL / PostGIS**: Persistent spatial database and authoritative source of truth storing road edge geometries, safe havens, base SRI risk profiles, and community incident reports.
+- **NetworkX Graph Cache**: In-memory directed graph loaded at startup for fast pathfinding and runtime dynamic weight evaluations without modifying PostGIS data.
 
 ---
 
-# Planned Architecture
+# Planned & Future Capabilities
 
-The complete SafeHer platform extends beyond the current prototype.
+The platform will expand with the following upcoming architecture:
 
-## 1. SafeHer Risk Index (SRI)
+## 1. ML-Based SafeHer Risk Index & Predictive Analytics
 
-Each road segment will receive a dynamic safety score derived from:
+The current deterministic SRI engine will be extended with machine learning models trained on historical data:
 
-- Historical crime statistics
-- Lighting conditions
-- Crowd density
-- Time of day
-- Safe Haven proximity
-- Community reports
+- Machine learning risk prediction (scikit-learn / TensorFlow)
+- Real-time traffic and crowd density integration
+- Temporal and weather-dependent risk adjustment
 
 ---
 
-## 2. Risk-Aware Route Recommendation
+## 2. Advanced Explainable AI (SHAP)
 
-Instead of minimizing only distance,
+Current explainability is rule-based. Future releases will introduce model-level feature attribution:
 
-the routing engine will minimize:
-
-```
-Travel Cost =
-Travel Time
-+ Risk Score
-+ Uncertainty
-```
-
-Supported routing modes:
-
-- Fastest
-- Safest
-- Balanced
+- SHAP (SHapley Additive exPlanations) for ML model interpretability
+- Detailed feature influence breakdown per route recommendation
+- Model confidence scoring and uncertainty visualization
 
 ---
 
-## 3. Explainable AI
+## 3. Community Trust System
 
-Every generated safety score will include an explanation showing the factors contributing to the decision.
+Building upon the current incident reporting module:
 
-Example:
-
-```
-Risk Score: 82
-
-Primary Contributors
-
-• Poor lighting
-• Recent harassment reports
-• No nearby Safe Havens
-
-Confidence: 92%
-```
-
-The explainability module is planned using SHAP.
+- User reputation scores and credibility weighting
+- Multi-user report verification and anti-spam algorithms
+- Community feedback loops on route safety quality
 
 ---
 
-## 4. Community Trust System
-
-Users will be able to submit reports including:
-
-- Harassment
-- Following behaviour
-- Poor lighting
-- Broken infrastructure
-- Suspicious activity
-
-Reports will influence routing only after credibility evaluation using:
-
-- Reputation scores
-- Report verification
-- Time decay
-- Spatial validation
-
----
-
-## 5. Privacy and Security
+## 4. Privacy and Security (Milestone 7)
 
 Future releases will include:
 
-- Anonymous reporting
-- Trusted contacts
-- End-to-end encryption
-- SOS workflows
-- Location anonymization
-- Secure data retention
-- Role-based access control
+- User authentication and role-based access control
+- Trusted contacts and automated location sharing
+- End-to-end encryption for sensitive data
+- One-touch SOS workflows
+- Privacy-preserving location anonymization
 
 ---
 
-## 6. Dynamic Route Recalculation
+## 5. Dynamic Real-Time Navigation Recalculation
 
-During active navigation the routing engine will continuously monitor:
+Continuous background monitoring during active navigation:
 
-- Community reports
-- Dynamic risk updates
-- Road closures
-- Emergency incidents
-
-Routes will automatically update whenever a safer alternative becomes available.
+- Real-time incident alert monitoring
+- Automated rerouting when safer paths become available
+- Turn-by-turn safety guidance
 
 ---
 
@@ -210,34 +192,33 @@ Routes will automatically update whenever a safer alternative becomes available.
 ## Backend
 
 - Python
-- Flask
+- Flask & Flask-CORS
 - NetworkX
 - psycopg2
+- SQLAlchemy & GeoAlchemy2
 
 ## Spatial Technologies
 
-- PostgreSQL
-- PostGIS
+- PostgreSQL + PostGIS
 - OpenStreetMap
 - OSMnx
-- Overpass API
+- Overpass API / overpy
 
 ## Frontend
 
-- HTML
-- CSS
-- JavaScript
-- Leaflet
+- HTML5 / CSS3
+- JavaScript (ES6+)
+- Leaflet.js
 
 ## Infrastructure
 
-- Docker
-- Docker Compose
+- Docker & Docker Compose
+- python-dotenv
 
 ## Planned Machine Learning Stack
 
-- TensorFlow
 - Scikit-learn
+- TensorFlow
 - SHAP
 
 ---
@@ -247,11 +228,25 @@ Routes will automatically update whenever a safer alternative becomes available.
 ```
 backend/
     api/
+        analysis.py
+        reports.py
+        routes.py
+        safe_havens.py
+        sri.py
     core/
+        incident_engine.py
+        route_analyzer.py
+        routing_service.py
+        safety_score.py
+        sri_engine.py
     db/
+        models.py
     scripts/
+app.py
+config.py
 
 frontend/
+    index.html
 
 research/
 
@@ -270,9 +265,8 @@ Completed
 
 - Dockerized PostgreSQL + PostGIS
 - Road graph import using OSMnx
-- Spatial indexing
-- Graph validation
-- Geometry verification
+- Spatial indexing using GiST
+- Graph validation and geometry verification
 
 ---
 
@@ -280,10 +274,10 @@ Completed
 
 Completed
 
-- Directed graph construction
-- Shortest-path routing
-- Route API
-- GeoJSON output
+- Directed graph construction with NetworkX
+- Shortest-path routing engine
+- Route API (`/api/route`)
+- GeoJSON output generation
 - Graph caching
 
 ---
@@ -292,40 +286,44 @@ Completed
 
 Completed
 
-- Safe Haven database
-- Nearby Safe Haven queries
-- Interactive Leaflet map
-- Route visualization
+- Safe Haven database schema and OSM import
+- Nearby Safe Haven spatial queries (police, hospitals, pharmacies)
+- Interactive Leaflet map integration
+- Route proximity linking
 
 ---
 
-## Milestone 4 — SafeHer Risk Index
+## Milestone 4 — SafeHer Risk Index (SRI)
 
-Planned
+Completed
 
-- Continuous risk scoring
-- Dynamic edge weights
-- Multi-objective routing
-
----
-
-## Milestone 5 — Community Intelligence
-
-Planned
-
-- Community reports
-- Trust and reputation system
-- Dynamic route updates
+- Continuous edge risk scoring (road type, lighting, segment length, safe haven proximity)
+- Dynamic edge weight calculation and effective route risk computation
+- Multi-objective routing modes (`fastest`, `balanced`, `safest`)
+- REST API endpoints (`/api/sri/statistics`, `/api/sri/edge`) and PostGIS persistence
 
 ---
 
-## Milestone 6 — Explainable AI
+## Milestone 5 — Dynamic Community Incident-Aware Routing
 
-Planned
+Completed
 
-- SHAP explanations
-- Confidence scoring
-- Feature attribution
+- Community incident report submission and query API (`/api/reports`)
+- Distance-based (200m) and 7-day time-decayed penalty calculation
+- Runtime edge risk overlay without graph cache mutation
+- Incident-aware route optimization and frontend map visualization
+
+---
+
+## Milestone 6 — Explainable Route Safety Analysis
+
+Completed
+
+- Deterministic rule-based route safety assessment engine (`calculate_safety_score`)
+- 0–100 overall route safety score and safety level classification (`SAFE` to `CRITICAL`)
+- Contributing factor attribution (positive and negative factors) and contextual recommendations derived from route features
+- Integrated `/api/route/analyze` endpoint and interactive frontend analysis panel
+- *(Note: ML-based SHAP explainability is planned for future releases)*
 
 ---
 
@@ -333,8 +331,8 @@ Planned
 
 Planned
 
-- Authentication
-- Trusted contacts
+- Authentication and user management
+- Trusted contacts and location sharing
 - SOS workflows
 - Privacy-preserving architecture
 
@@ -342,7 +340,7 @@ Planned
 
 # Future Scope
 
-The long-term objective is to evolve SafeHer AI from a routing prototype into a comprehensive safety navigation platform capable of combining geospatial analytics, artificial intelligence, explainable machine learning, and privacy-first system design to support safer urban mobility.
+The long-term objective is to evolve SafeHer AI into a comprehensive safety navigation platform capable of combining geospatial analytics, artificial intelligence, explainable machine learning, and privacy-first system design to support safer urban mobility.
 
 ---
 
